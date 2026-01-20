@@ -1,7 +1,6 @@
 package render
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	"image/color"
@@ -13,11 +12,6 @@ import (
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/fixed"
 
-	"github.com/go-text/typesetting/di"
-	otfontapi "github.com/go-text/typesetting/font"
-	"github.com/go-text/typesetting/shaping"
-
-	"github.com/notblessy/shellui/core/font"
 	"github.com/notblessy/shellui/core/view"
 	"github.com/notblessy/shellui/widget/button"
 	"github.com/notblessy/shellui/widget/text"
@@ -42,13 +36,13 @@ type glyphCacheKey struct {
 type GLPainterType struct {
 	PainterType
 	textureCache  map[string]uint32                 // Cache for full text strings (legacy)
-	glyphCache    map[glyphCacheKey]glyphCacheEntry // Cache for individual glyphs
+	glyphCache    map[glyphCacheKey]glyphCacheEntry // Cache for individual glyphs (legacy, kept for compatibility)
 	cacheMutex    sync.RWMutex
-	shaderProgram uint32          // Shader program for texture rendering
-	quadVAO       uint32          // VAO for quad rendering
-	quadVBO       uint32          // VBO for quad vertices
-	robotoFonts   []font.FontFace // Loaded Roboto fonts
-	fontOnce      sync.Once       // Ensure fonts are loaded once
+	shaderProgram uint32        // Shader program for texture rendering
+	quadVAO       uint32        // VAO for quad rendering
+	quadVBO       uint32        // VBO for quad vertices
+	textRenderer  *textRenderer // Text renderer using go-text/render (Fyne-style)
+	dpiScale      float32       // DPI scale factor
 }
 
 // NewGLPainter creates a new OpenGL-based painter.
@@ -60,7 +54,11 @@ func NewGLPainter(width, height int) Painter {
 		},
 		textureCache: make(map[string]uint32),
 		glyphCache:   make(map[glyphCacheKey]glyphCacheEntry),
+		dpiScale:     1.0,
 	}
+
+	// Initialize text renderer (Fyne-style, uses system fonts)
+	p.textRenderer = getTextRenderer()
 
 	// Initialize shaders and quad rendering
 	p.initShaders()
@@ -69,26 +67,7 @@ func NewGLPainter(width, height int) Painter {
 	return p
 }
 
-// loadRobotoFonts loads Roboto fonts from assets
-func (p *GLPainterType) loadRobotoFonts() {
-	p.fontOnce.Do(func() {
-		faces, err := font.LoadRoboto()
-		if err != nil {
-			// Log error but don't panic - fallback to basicfont
-			fmt.Printf("Warning: Failed to load Roboto fonts: %v\n", err)
-			p.robotoFonts = nil
-		} else {
-			p.robotoFonts = faces
-			fmt.Printf("Loaded %d Roboto font faces\n", len(faces))
-		}
-	})
-}
-
-// getRobotoFace returns a Roboto font face matching the style and weight
-func (p *GLPainterType) getRobotoFace(style font.Style, weight font.Weight) (font.FontFace, bool) {
-	p.loadRobotoFonts()
-	return font.GetRobotoFaceByStyle(style, weight)
-}
+// Note: Roboto font loading removed - now using system fonts via textRenderer
 
 // initShaders initializes the shader program for texture rendering
 func (p *GLPainterType) initShaders() {
@@ -177,7 +156,7 @@ func (p *GLPainterType) drawObject(v view.View, x, y, width, height float32) {
 	}
 }
 
-// drawText renders a text widget by rendering each glyph individually.
+// drawText renders a text widget (following Fyne's pattern: text -> image -> texture)
 func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) {
 	content := t.GetContent()
 	if content == "" {
@@ -190,54 +169,35 @@ func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) 
 		fontSize = 16 // Default font size
 	}
 
-	// Map text.FontWeight to font.Weight
-	var fontWeight font.Weight
-	var fontStyle font.Style
-	switch t.GetWeight() {
-	case text.FontWeightBold:
-		fontWeight = font.Bold
-	case text.FontWeightLight:
-		fontWeight = font.Light
-	case text.FontWeightMedium:
-		fontWeight = font.Medium
-	case text.FontWeightSemibold:
-		fontWeight = font.SemiBold
-	default:
-		fontWeight = font.Normal
+	// Get color (default to black if not specified)
+	textColor := &color.RGBA{R: 0, G: 0, B: 0, A: 255} // Default black
+
+	// Determine bold/italic
+	isBold := t.IsBold() || t.GetWeight() == text.FontWeightBold
+	isItalic := false // Add italic support if needed
+
+	// Render text to image using go-text/render (Fyne-style)
+	if p.textRenderer == nil {
+		// Fallback if renderer not initialized
+		return
 	}
 
-	if t.IsBold() {
-		fontWeight = font.Bold
-	}
-
-	// Load Roboto fonts
-	p.loadRobotoFonts()
-
-	// Get Roboto font face
-	robotoFace, ok := p.getRobotoFace(fontStyle, fontWeight)
-
-	var img *image.RGBA
-	if ok {
-		// Use Roboto font
-		img = p.renderTextWithRoboto(content, robotoFace, fontSize)
-	}
-
-	// Fallback to basicfont if Roboto not available or rendering failed
-	if img == nil {
-		isBold := t.IsBold() || t.GetWeight() == text.FontWeightBold
-		img = p.textToImageWithStyle(content, fontSize, isBold, t.GetWeight())
-	}
+	img := p.textRenderer.renderTextToImageRGBA(
+		content,
+		fontSize,
+		textColor,
+		isBold,
+		isItalic,
+		p.dpiScale,
+	)
 
 	if img == nil {
 		return
 	}
 
-	// Get natural text size
+	// Get text size
 	textWidth := float32(img.Bounds().Dx())
 	textHeight := float32(img.Bounds().Dy())
-
-	// Measure total text width for alignment
-	totalWidth := textWidth
 
 	// Calculate X position based on alignment
 	var textX float32
@@ -245,20 +205,17 @@ func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) 
 	case text.TextAlignLeading:
 		textX = x
 	case text.TextAlignCenter:
-		textX = x + (width-totalWidth)/2
+		textX = x + (width-textWidth)/2
 	case text.TextAlignTrailing:
-		textX = x + width - totalWidth
+		textX = x + width - textWidth
 	default:
 		textX = x
 	}
 
-	// Position at top (no vertical centering)
-	// Keep coordinates in screen space (top-left origin) - drawImage will handle conversion to OpenGL
-	textY := y
-	// textX is already calculated above based on alignment
+	// Center vertically
+	textY := y + (height-textHeight)/2
 
-	// Draw the entire text image using shader-based rendering
-	// drawImage expects screen coordinates (top-left origin) and will convert internally
+	// Draw as texture (like Fyne)
 	p.drawImage(img, textX, textY, textWidth, textHeight)
 }
 
@@ -446,8 +403,20 @@ func (p *GLPainterType) drawVStack(vs *view.VStackType, x, y, width, height floa
 			if textChild, ok := child.(*text.TextType); ok {
 				// Measure text to get natural height
 				content := textChild.GetContent()
-				if content != "" {
-					img := p.textToImageWithStyle(content, textChild.GetSize(), textChild.IsBold(), textChild.GetWeight())
+				if content != "" && p.textRenderer != nil {
+					fontSize := textChild.GetSize()
+					if fontSize == 0 {
+						fontSize = 16
+					}
+					isBold := textChild.IsBold() || textChild.GetWeight() == text.FontWeightBold
+					img := p.textRenderer.renderTextToImageRGBA(
+						content,
+						fontSize,
+						&color.RGBA{R: 0, G: 0, B: 0, A: 255},
+						isBold,
+						false,
+						p.dpiScale,
+					)
 					if img != nil {
 						childHeight = float32(img.Bounds().Dy())
 					} else {
@@ -518,8 +487,20 @@ func (p *GLPainterType) drawHStack(hs *view.HStackType, x, y, width, height floa
 			if textChild, ok := child.(*text.TextType); ok {
 				// Measure text to get natural width
 				content := textChild.GetContent()
-				if content != "" {
-					img := p.textToImageWithStyle(content, textChild.GetSize(), textChild.IsBold(), textChild.GetWeight())
+				if content != "" && p.textRenderer != nil {
+					fontSize := textChild.GetSize()
+					if fontSize == 0 {
+						fontSize = 16
+					}
+					isBold := textChild.IsBold() || textChild.GetWeight() == text.FontWeightBold
+					img := p.textRenderer.renderTextToImageRGBA(
+						content,
+						fontSize,
+						&color.RGBA{R: 0, G: 0, B: 0, A: 255},
+						isBold,
+						false,
+						p.dpiScale,
+					)
 					if img != nil {
 						childWidth = float32(img.Bounds().Dx())
 					} else {
@@ -877,156 +858,9 @@ func (p *GLPainterType) getOrCreateTexture(img *image.RGBA) uint32 {
 	return texture
 }
 
-// renderTextWithRoboto renders text using a Roboto OpenType font
-func (p *GLPainterType) renderTextWithRoboto(content string, fontFace font.FontFace, fontSize float32) *image.RGBA {
-	if content == "" {
-		return nil
-	}
-
-	// Get the OpenType font
-	faceInterface := fontFace.Face
-	otFace := faceInterface.Face()
-	if otFace == nil {
-		return p.textToImageWithStyle(content, fontSize, false, text.FontWeightRegular)
-	}
-	otFont := otFace.Font
-	if otFont == nil {
-		// Fallback to basicfont
-		return p.textToImageWithStyle(content, fontSize, false, text.FontWeightRegular)
-	}
-
-	// Convert font size (points) to pixels
-	// 1 point = 1/72 inch, assuming 96 DPI: 1 point = 96/72 = 4/3 pixels
-	ppem := fontSize * (96.0 / 72.0)      // pixels per em
-	ppemFixed := fixed.Int26_6(ppem * 64) // Convert to fixed point
-
-	// Use text shaping API to get accurate text measurements
-	runes := []rune(content)
-	input := shaping.Input{
-		Text:      runes,
-		Size:      ppemFixed,
-		Face:      otFace,
-		Direction: di.DirectionLTR,
-		RunStart:  0,
-		RunEnd:    len(runes),
-	}
-
-	// Create a shaper and shape the text
-	shaper := shaping.HarfbuzzShaper{}
-	output := shaper.Shape(input)
-	if len(output.Glyphs) == 0 {
-		// Fallback if shaping fails
-		return p.textToImageWithStyle(content, fontSize, false, text.FontWeightRegular)
-	}
-
-	// Calculate total width from shaped glyphs
-	var totalWidth fixed.Int26_6
-	for _, g := range output.Glyphs {
-		totalWidth += g.XAdvance
-	}
-
-	// Get font metrics from shaping output
-	ascent := output.LineBounds.Ascent
-	descent := output.LineBounds.Descent
-	height := (ascent + descent).Ceil()
-
-	// Create image with proper dimensions
-	imgWidth := totalWidth.Ceil()
-	imgHeight := height
-
-	if imgWidth == 0 || imgHeight == 0 {
-		return nil
-	}
-
-	// Create RGBA image
-	img := image.NewRGBA(image.Rect(0, 0, imgWidth, imgHeight))
-
-	// Render glyphs to image
-	// For now, we'll use a simple approach: render each glyph as a bitmap if available,
-	// otherwise fall back to basicfont rendering
-	var xPos fixed.Int26_6
-	baseline := ascent.Ceil()
-
-	for _, g := range output.Glyphs {
-		// Try to get glyph bitmap data
-		glyphData := otFace.GlyphData(g.GlyphID)
-
-		switch glyphData := glyphData.(type) {
-		case otfontapi.GlyphBitmap:
-			// Render bitmap glyph
-			p.renderBitmapGlyph(img, glyphData, xPos, baseline, g)
-		default:
-			// For vector outlines, we'd need a rasterizer
-			// For now, use basicfont as fallback for individual glyphs
-			// This is a simplified approach - a full implementation would rasterize vector paths
-		}
-
-		xPos += g.XAdvance
-	}
-
-	// If no glyphs were rendered (all were vector outlines), fall back to basicfont
-	// Check if image is empty
-	hasContent := false
-	for _, pix := range img.Pix {
-		if pix != 0 {
-			hasContent = true
-			break
-		}
-	}
-
-	if !hasContent {
-		// Fallback to basicfont with proper sizing
-		return p.textToImageWithStyle(content, fontSize, false, text.FontWeightRegular)
-	}
-
-	return img
-}
-
-// renderBitmapGlyph renders a bitmap glyph to an image
-func (p *GLPainterType) renderBitmapGlyph(img *image.RGBA, glyphData otfontapi.GlyphBitmap, xPos fixed.Int26_6, baseline int, g shaping.Glyph) {
-	// Decode bitmap data based on format
-	var bitmapImg image.Image
-	var err error
-
-	switch glyphData.Format {
-	case otfontapi.PNG:
-		bitmapImg, _, err = image.Decode(bytes.NewReader(glyphData.Data))
-		if err != nil {
-			return
-		}
-	default:
-		// Unsupported format
-		return
-	}
-
-	// Get bitmap bounds
-	bounds := bitmapImg.Bounds()
-	bitmapWidth := bounds.Dx()
-	bitmapHeight := bounds.Dy()
-
-	// Calculate position
-	x := xPos.Ceil() + g.XBearing.Ceil()
-	y := baseline - g.YBearing.Ceil()
-
-	// Draw bitmap to image
-	for by := 0; by < bitmapHeight; by++ {
-		for bx := 0; bx < bitmapWidth; bx++ {
-			imgX := x + bx
-			imgY := y + by
-
-			if imgX >= 0 && imgX < img.Bounds().Dx() && imgY >= 0 && imgY < img.Bounds().Dy() {
-				// Get color from bitmap (convert to RGBA)
-				r, g, b, a := bitmapImg.At(bx, by).RGBA()
-				img.Set(imgX, imgY, color.RGBA{
-					R: uint8(r >> 8),
-					G: uint8(g >> 8),
-					B: uint8(b >> 8),
-					A: uint8(a >> 8),
-				})
-			}
-		}
-	}
-}
+// NOTE: renderTextWithRoboto and renderBitmapGlyph removed
+// These functions are no longer used - text rendering now uses textRenderer
+// which follows Fyne's pattern with go-text/render
 
 func drawButtonBackground(x, y, width, height float32) {
 	gl.Enable(gl.SCISSOR_TEST)
