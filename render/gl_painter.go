@@ -1,36 +1,133 @@
 package render
 
 import (
+	"bytes"
+	"fmt"
 	"image"
 	"image/color"
+	_ "image/png"
 	"sync"
 
 	"github.com/go-gl/gl/v4.1-core/gl"
-	"golang.org/x/image/font"
+	gofont "golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/fixed"
 
+	"github.com/go-text/typesetting/di"
+	otfontapi "github.com/go-text/typesetting/font"
+	"github.com/go-text/typesetting/shaping"
+
+	"github.com/notblessy/shellui/core/font"
 	"github.com/notblessy/shellui/core/view"
 	"github.com/notblessy/shellui/widget/button"
 	"github.com/notblessy/shellui/widget/text"
 )
 
+// glyphCacheEntry stores a cached glyph texture, image, and its metrics
+type glyphCacheEntry struct {
+	texture uint32
+	image   *image.RGBA // Store image for direct drawing
+	width   int
+	height  int
+}
+
+// glyphCacheKey is used to uniquely identify a glyph in the cache
+type glyphCacheKey struct {
+	rune  rune
+	scale float32
+	bold  bool
+}
+
 // GLPainterType is an OpenGL-based painter implementation.
 type GLPainterType struct {
 	PainterType
-	textureCache map[string]uint32 // Cache for text textures
-	cacheMutex   sync.RWMutex
+	textureCache  map[string]uint32                 // Cache for full text strings (legacy)
+	glyphCache    map[glyphCacheKey]glyphCacheEntry // Cache for individual glyphs
+	cacheMutex    sync.RWMutex
+	shaderProgram uint32          // Shader program for texture rendering
+	quadVAO       uint32          // VAO for quad rendering
+	quadVBO       uint32          // VBO for quad vertices
+	robotoFonts   []font.FontFace // Loaded Roboto fonts
+	fontOnce      sync.Once       // Ensure fonts are loaded once
 }
 
 // NewGLPainter creates a new OpenGL-based painter.
 func NewGLPainter(width, height int) Painter {
-	return &GLPainterType{
+	p := &GLPainterType{
 		PainterType: PainterType{
 			width:  width,
 			height: height,
 		},
 		textureCache: make(map[string]uint32),
+		glyphCache:   make(map[glyphCacheKey]glyphCacheEntry),
 	}
+
+	// Initialize shaders and quad rendering
+	p.initShaders()
+	p.initQuad()
+
+	return p
+}
+
+// loadRobotoFonts loads Roboto fonts from assets
+func (p *GLPainterType) loadRobotoFonts() {
+	p.fontOnce.Do(func() {
+		faces, err := font.LoadRoboto()
+		if err == nil {
+			p.robotoFonts = faces
+		}
+	})
+}
+
+// getRobotoFace returns a Roboto font face matching the style and weight
+func (p *GLPainterType) getRobotoFace(style font.Style, weight font.Weight) (font.FontFace, bool) {
+	p.loadRobotoFonts()
+	return font.GetRobotoFaceByStyle(style, weight)
+}
+
+// initShaders initializes the shader program for texture rendering
+func (p *GLPainterType) initShaders() {
+	program, err := createShaderProgram(vertexShaderSource, fragmentShaderSource)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create shader program: %v", err))
+	}
+	p.shaderProgram = program
+}
+
+// initQuad initializes the quad VAO and VBO for rendering
+func (p *GLPainterType) initQuad() {
+	// Quad vertices: position (x, y) and texture coordinates (u, v)
+	// Note: Go images have origin at top-left, but OpenGL textures have origin at bottom-left
+	// So we flip the V coordinate to match
+	vertices := []float32{
+		// positions   // tex coords (V flipped: 1.0 at bottom, 0.0 at top)
+		0.0, 0.0, 0.0, 1.0, // bottom-left (image top-left)
+		1.0, 0.0, 1.0, 1.0, // bottom-right (image top-right)
+		0.0, 1.0, 0.0, 0.0, // top-left (image bottom-left)
+		1.0, 1.0, 1.0, 0.0, // top-right (image bottom-right)
+	}
+
+	var vao, vbo uint32
+	gl.GenVertexArrays(1, &vao)
+	gl.GenBuffers(1, &vbo)
+
+	gl.BindVertexArray(vao)
+	gl.BindBuffer(gl.ARRAY_BUFFER, vbo)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
+
+	// Position attribute
+	gl.VertexAttribPointer(0, 2, gl.FLOAT, false, 4*4, gl.PtrOffset(0))
+	gl.EnableVertexAttribArray(0)
+
+	// Texture coordinate attribute
+	gl.VertexAttribPointer(1, 2, gl.FLOAT, false, 4*4, gl.PtrOffset(2*4))
+	gl.EnableVertexAttribArray(1)
+
+	gl.BindBuffer(gl.ARRAY_BUFFER, 0)
+	gl.BindVertexArray(0)
+
+	p.quadVAO = vao
+	p.quadVBO = vbo
 }
 
 // Clear clears the screen with background color.
@@ -75,24 +172,67 @@ func (p *GLPainterType) drawObject(v view.View, x, y, width, height float32) {
 	}
 }
 
-// drawText renders a text widget:
-// 1. Render text to an image
-// 2. Draw image directly (can be upgraded to texture later)
+// drawText renders a text widget by rendering each glyph individually.
 func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) {
 	content := t.GetContent()
 	if content == "" {
 		return
 	}
 
-	// Render text to image
-	img := p.textToImage(content)
+	// Get font properties
+	fontSize := t.GetSize()
+	if fontSize == 0 {
+		fontSize = 16 // Default font size
+	}
+
+	// Map text.FontWeight to font.Weight
+	var fontWeight font.Weight
+	var fontStyle font.Style
+	switch t.GetWeight() {
+	case text.FontWeightBold:
+		fontWeight = font.Bold
+	case text.FontWeightLight:
+		fontWeight = font.Light
+	case text.FontWeightMedium:
+		fontWeight = font.Medium
+	case text.FontWeightSemibold:
+		fontWeight = font.SemiBold
+	default:
+		fontWeight = font.Normal
+	}
+
+	if t.IsBold() {
+		fontWeight = font.Bold
+	}
+
+	// Load Roboto fonts
+	p.loadRobotoFonts()
+
+	// Get Roboto font face
+	robotoFace, ok := p.getRobotoFace(fontStyle, fontWeight)
+
+	var img *image.RGBA
+	if ok {
+		// Use Roboto font
+		img = p.renderTextWithRoboto(content, robotoFace, fontSize)
+	}
+
+	// Fallback to basicfont if Roboto not available or rendering failed
+	if img == nil {
+		isBold := t.IsBold() || t.GetWeight() == text.FontWeightBold
+		img = p.textToImageWithStyle(content, fontSize, isBold, t.GetWeight())
+	}
+
 	if img == nil {
 		return
 	}
 
-	// Calculate text metrics for alignment
+	// Get natural text size
 	textWidth := float32(img.Bounds().Dx())
 	textHeight := float32(img.Bounds().Dy())
+
+	// Measure total text width for alignment
+	totalWidth := textWidth
 
 	// Calculate X position based on alignment
 	var textX float32
@@ -100,24 +240,154 @@ func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) 
 	case text.TextAlignLeading:
 		textX = x
 	case text.TextAlignCenter:
-		textX = x + (width-textWidth)/2
+		textX = x + (width-totalWidth)/2
 	case text.TextAlignTrailing:
-		textX = x + width - textWidth
+		textX = x + width - totalWidth
 	default:
 		textX = x
 	}
 
-	// Center vertically
-	textY := y + (height-textHeight)/2
+	// Position at top (no vertical centering)
+	textY := y
 
 	// Convert to OpenGL coordinates (bottom-left origin)
 	glX := textX
 	glY := float32(p.height) - (textY + textHeight)
-	glWidth := textWidth
-	glHeight := textHeight
 
-	// Draw image directly (simple approach, can upgrade to texture later)
-	p.drawImage(img, glX, glY, glWidth, glHeight)
+	// Draw the entire text image using shader-based rendering
+	p.drawImage(img, glX, glY, textWidth, textHeight)
+}
+
+// measureTextWidth measures the total width of text without rendering it.
+func (p *GLPainterType) measureTextWidth(content string, face gofont.Face, scale float32) float32 {
+	var totalWidth float32
+	for _, r := range content {
+		glyphAdvance, ok := face.GlyphAdvance(r)
+		if !ok {
+			glyphAdvance = fixed.Int26_6(7 * 64) // Default width for basicfont
+		}
+		advance := float32(face.Kern(0, r).Ceil()) + float32(glyphAdvance.Ceil())
+		totalWidth += advance * scale
+	}
+	return totalWidth
+}
+
+// getGlyphTexture gets or creates a texture for a single glyph.
+func (p *GLPainterType) getGlyphTexture(r rune, face gofont.Face, scale float32, bold bool) glyphCacheEntry {
+	// Create cache key (includes rune, scale, and bold for proper caching)
+	key := glyphCacheKey{
+		rune:  r,
+		scale: scale,
+		bold:  bold,
+	}
+
+	// Check cache first
+	p.cacheMutex.RLock()
+	if entry, ok := p.glyphCache[key]; ok {
+		p.cacheMutex.RUnlock()
+		return entry
+	}
+	p.cacheMutex.RUnlock()
+
+	// Create glyph image
+	glyphImg := p.renderGlyphToImage(r, face, scale, bold)
+	if glyphImg == nil {
+		return glyphCacheEntry{}
+	}
+
+	// Create texture from glyph image
+	texture := p.createTextureFromImage(glyphImg)
+	entry := glyphCacheEntry{
+		texture: texture,
+		image:   glyphImg,
+		width:   glyphImg.Bounds().Dx(),
+		height:  glyphImg.Bounds().Dy(),
+	}
+
+	// Cache it
+	p.cacheMutex.Lock()
+	p.glyphCache[key] = entry
+	p.cacheMutex.Unlock()
+
+	return entry
+}
+
+// renderGlyphToImage renders a single glyph to an image.
+func (p *GLPainterType) renderGlyphToImage(r rune, face gofont.Face, scale float32, bold bool) *image.RGBA {
+	// Use the same approach as textToImage but for a single character
+	// Measure the single character
+	charStr := string(r)
+	advance := gofont.MeasureString(face, charStr)
+	width := advance.Ceil()
+	height := face.Metrics().Height.Ceil()
+
+	// Add extra width for bold
+	if bold {
+		width += 1
+	}
+
+	// Create image at base size
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+
+	// Create drawer - use the exact same pattern as textToImage
+	d := &gofont.Drawer{
+		Dst:  img,
+		Src:  image.NewUniform(color.Black),
+		Face: face,
+		Dot: fixed.Point26_6{
+			X: 0,
+			Y: fixed.Int26_6(face.Metrics().Ascent),
+		},
+	}
+
+	// Draw the glyph
+	d.DrawString(charStr)
+
+	// Apply bold effect if needed
+	if bold {
+		d.Dot = fixed.Point26_6{
+			X: fixed.Int26_6(1),
+			Y: fixed.Int26_6(face.Metrics().Ascent),
+		}
+		d.DrawString(charStr)
+	}
+
+	// Scale if needed
+	if scale != 1.0 {
+		return p.scaleImage(img, scale)
+	}
+
+	return img
+}
+
+// createTextureFromImage creates an OpenGL texture from an image.
+func (p *GLPainterType) createTextureFromImage(img *image.RGBA) uint32 {
+	var texture uint32
+	gl.GenTextures(1, &texture)
+	gl.BindTexture(gl.TEXTURE_2D, texture)
+
+	// Set texture parameters
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+	// Upload image data
+	width := img.Bounds().Dx()
+	height := img.Bounds().Dy()
+	gl.TexImage2D(
+		gl.TEXTURE_2D,
+		0,
+		gl.RGBA,
+		int32(width),
+		int32(height),
+		0,
+		gl.RGBA,
+		gl.UNSIGNED_BYTE,
+		gl.Ptr(img.Pix),
+	)
+
+	return texture
 }
 
 // drawButton renders a button widget.
@@ -138,47 +408,128 @@ func (p *GLPainterType) drawButton(b *button.ButtonType, x, y, width, height flo
 }
 
 // drawVStack renders a vertical stack.
-// Stacks are transparent containers - they don't draw backgrounds.
+// VStack default: height 100%, width auto, no padding/margin
+// Children are laid out vertically with natural sizing (not stretched).
 func (p *GLPainterType) drawVStack(vs *view.VStackType, x, y, width, height float32) {
 	children := vs.GetChildren()
 	if len(children) == 0 {
 		return
 	}
 
-	// Simple layout: divide height equally among children
-	// Add some padding
-	padding := float32(10)
-	availableHeight := height - float32(len(children)-1)*padding
-	childHeight := availableHeight / float32(len(children))
-	currentY := y + padding // Start with some padding from top
+	// Apply width/height styling
+	stackWidth := width
+
+	if vs.GetWidth() >= 0 {
+		// Fixed width specified
+		stackWidth = vs.GetWidth()
+	}
+	// If width < 0, use natural/auto width (use available width)
+
+	// Note: stackHeight could be used to constrain layout, but for now
+	// we lay out children naturally. If vs.GetHeight() >= 0, it sets a fixed height.
+	_ = vs.GetHeight() // Height styling is available but not yet used for constraint
+
+	// No padding or margin by default (SwiftUI-like)
+	// Children are laid out vertically starting from top
+	currentY := y
 
 	// Stacks don't draw backgrounds - just render children
+	// Each child gets its natural size (width from parent, height from content)
 	for _, child := range children {
 		if child != nil {
-			p.Paint(child, x+padding, currentY, width-padding*2, childHeight)
+			// Measure child to get natural height
+			var childHeight float32
+			if textChild, ok := child.(*text.TextType); ok {
+				// Measure text to get natural height
+				content := textChild.GetContent()
+				if content != "" {
+					img := p.textToImageWithStyle(content, textChild.GetSize(), textChild.IsBold(), textChild.GetWeight())
+					if img != nil {
+						childHeight = float32(img.Bounds().Dy())
+					} else {
+						childHeight = 20 // Fallback
+					}
+				} else {
+					childHeight = 20 // Fallback
+				}
+			} else {
+				// For other view types, use a reasonable default
+				// A proper layout engine would measure all children first
+				childHeight = 20 // Fallback height
+			}
+
+			// Render child with natural height (not stretched)
+			p.Paint(child, x, currentY, stackWidth, childHeight)
+
+			// Move to next position
+			currentY += childHeight
 		}
-		currentY += childHeight + padding
 	}
 }
 
 // drawHStack renders a horizontal stack.
-// Stacks are transparent containers - they don't draw backgrounds.
+// HStack default: width 100%, height auto, no padding/margin
+// Children are laid out horizontally with natural sizing (not stretched).
 func (p *GLPainterType) drawHStack(hs *view.HStackType, x, y, width, height float32) {
 	children := hs.GetChildren()
 	if len(children) == 0 {
 		return
 	}
 
-	// Simple layout: divide width equally among children
-	childWidth := width / float32(len(children))
+	// Apply width/height styling
+	stackWidth := width
+	stackHeight := height
+
+	if hs.GetWidth() >= 0 {
+		// Fixed width specified
+		stackWidth = hs.GetWidth()
+	}
+	// If width < 0, use natural/auto width (defaults to 100% of available, which is already set)
+
+	if hs.GetHeight() >= 0 {
+		// Fixed height specified
+		stackHeight = hs.GetHeight()
+	}
+	// If height < 0, use natural/auto height (use available height)
+
+	// No padding or margin by default (SwiftUI-like)
+	// Children are laid out horizontally starting from left
 	currentX := x
 
 	// Stacks don't draw backgrounds - just render children
+	// Each child gets its natural width (height from parent)
 	for _, child := range children {
 		if child != nil {
-			p.Paint(child, currentX, y, childWidth, height)
+			// Measure child to get natural width
+			var childWidth float32
+			if textChild, ok := child.(*text.TextType); ok {
+				// Measure text to get natural width
+				content := textChild.GetContent()
+				if content != "" {
+					img := p.textToImageWithStyle(content, textChild.GetSize(), textChild.IsBold(), textChild.GetWeight())
+					if img != nil {
+						childWidth = float32(img.Bounds().Dx())
+					} else {
+						childWidth = 50 // Fallback
+					}
+				} else {
+					childWidth = 50 // Fallback
+				}
+			} else if _, ok := child.(*view.SpacerType); ok {
+				// Spacer takes remaining space
+				remainingWidth := stackWidth - (currentX - x)
+				childWidth = remainingWidth
+			} else {
+				// For other view types, use a reasonable default
+				childWidth = 50 // Fallback width
+			}
+
+			// Render child with natural width (not stretched)
+			p.Paint(child, currentX, y, childWidth, stackHeight)
+
+			// Move to next position
+			currentX += childWidth
 		}
-		currentX += childWidth
 	}
 }
 
@@ -203,14 +554,15 @@ func (p *GLPainterType) StopClipping() {
 	gl.Disable(gl.SCISSOR_TEST)
 }
 
-// textToImage renders text to an image using basicfont.
+// textToImage renders text to an image using basicfont (backward compatibility).
+// This is the original working implementation - kept for reference and fallback.
 func (p *GLPainterType) textToImage(content string) *image.RGBA {
 	if content == "" {
 		return nil
 	}
 
 	face := basicfont.Face7x13
-	d := &font.Drawer{
+	d := &gofont.Drawer{
 		Dst:  nil, // Will create below
 		Src:  image.NewUniform(color.Black),
 		Face: face,
@@ -218,7 +570,7 @@ func (p *GLPainterType) textToImage(content string) *image.RGBA {
 	}
 
 	// Measure text to determine image size
-	advance := font.MeasureString(face, content)
+	advance := gofont.MeasureString(face, content)
 	width := advance.Ceil()
 	height := face.Metrics().Height.Ceil()
 
@@ -239,6 +591,120 @@ func (p *GLPainterType) textToImage(content string) *image.RGBA {
 	d.DrawString(content)
 
 	return img
+}
+
+// textToImageWithStyle renders text to an image using basicfont with styling.
+// This follows the same pattern as the original textToImage but adds font styling support.
+func (p *GLPainterType) textToImageWithStyle(content string, fontSize float32, bold bool, weight text.FontWeight) *image.RGBA {
+	if content == "" {
+		return nil
+	}
+
+	// If no styling is applied, use the original function for maximum compatibility
+	if fontSize == 0 && !bold && weight == text.FontWeightRegular {
+		return p.textToImage(content)
+	}
+
+	// Use basicfont.Face7x13 as base (this is a bitmap font, so we'll scale the image)
+	face := basicfont.Face7x13
+
+	// Calculate scale factor based on font size
+	// Default size is 13 points (matching Face7x13)
+	defaultSize := float32(13)
+	scale := float32(1.0)
+	if fontSize > 0 {
+		scale = fontSize / defaultSize
+	}
+
+	// For bold, we'll render the text twice with slight offset to simulate boldness
+	isBold := bold || weight == text.FontWeightBold
+
+	// Create drawer - match the original working pattern exactly
+	d := &gofont.Drawer{
+		Dst:  nil, // Will create below
+		Src:  image.NewUniform(color.Black),
+		Face: face,
+		Dot:  fixed.Point26_6{},
+	}
+
+	// Measure text to determine image size at base size
+	advance := gofont.MeasureString(face, content)
+	baseWidth := advance.Ceil()
+	baseHeight := face.Metrics().Height.Ceil()
+
+	// Add extra width for bold effect
+	if isBold {
+		baseWidth += 1
+	}
+
+	// Create image at base size first
+	baseImg := image.NewRGBA(image.Rect(0, 0, baseWidth, baseHeight))
+	// Initialize to fully transparent (already zero-initialized)
+
+	d.Dst = baseImg
+	// Set the dot position to account for font metrics
+	// Y position needs to be at the baseline - use the original pattern
+	d.Dot = fixed.Point26_6{
+		X: 0,
+		Y: fixed.Int26_6(face.Metrics().Ascent),
+	}
+
+	// Draw text at base size
+	d.DrawString(content)
+
+	// Apply bold effect by drawing text again with slight offset
+	if isBold {
+		d.Dot = fixed.Point26_6{
+			X: fixed.Int26_6(1), // 1 pixel offset for bold
+			Y: fixed.Int26_6(face.Metrics().Ascent),
+		}
+		d.DrawString(content)
+	}
+
+	// Scale the image if needed
+	if scale != 1.0 {
+		return p.scaleImage(baseImg, scale)
+	}
+
+	return baseImg
+}
+
+// scaleImage scales an image by the given factor.
+func (p *GLPainterType) scaleImage(src *image.RGBA, scale float32) *image.RGBA {
+	if scale == 1.0 {
+		return src
+	}
+
+	bounds := src.Bounds()
+	srcWidth := bounds.Dx()
+	srcHeight := bounds.Dy()
+
+	dstWidth := int(float32(srcWidth) * scale)
+	dstHeight := int(float32(srcHeight) * scale)
+
+	dst := image.NewRGBA(image.Rect(0, 0, dstWidth, dstHeight))
+
+	// Simple nearest-neighbor scaling
+	for y := 0; y < dstHeight; y++ {
+		for x := 0; x < dstWidth; x++ {
+			srcX := int(float32(x) / scale)
+			srcY := int(float32(y) / scale)
+
+			if srcX < srcWidth && srcY < srcHeight {
+				srcIdx := (srcY*srcWidth + srcX) * 4
+				dstIdx := (y*dstWidth + x) * 4
+
+				if srcIdx+3 < len(src.Pix) && dstIdx+3 < len(dst.Pix) {
+					dst.Pix[dstIdx] = src.Pix[srcIdx]
+					dst.Pix[dstIdx+1] = src.Pix[srcIdx+1]
+					dst.Pix[dstIdx+2] = src.Pix[srcIdx+2]
+					dst.Pix[dstIdx+3] = src.Pix[srcIdx+3]
+				}
+			}
+		}
+	}
+
+	return dst
 }
 
 // getTextTexture gets or creates a texture for the given text.
@@ -286,6 +752,58 @@ func (p *GLPainterType) getTextTexture(content string, img *image.RGBA) uint32 {
 
 // drawImage draws an image directly to the screen (simple approach).
 // Renders to image first, then draws. Can be upgraded to use textures and shaders later for better performance.
+// width and height parameters should match the actual image size - image is never scaled.
+// drawImageWithShader renders an image using shader-based quad rendering
+func (p *GLPainterType) drawImageWithShader(texture uint32, x, y, width, height float32) {
+	// Enable blending for transparency
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	defer gl.Disable(gl.BLEND)
+
+	// Use shader program
+	gl.UseProgram(p.shaderProgram)
+
+	// Bind texture
+	gl.ActiveTexture(gl.TEXTURE0)
+	gl.BindTexture(gl.TEXTURE_2D, texture)
+
+	// Set texture uniform
+	texUniform := gl.GetUniformLocation(p.shaderProgram, gl.Str("uTexture\x00"))
+	gl.Uniform1i(texUniform, 0)
+
+	// Set color uniform (white, full opacity)
+	colorUniform := gl.GetUniformLocation(p.shaderProgram, gl.Str("uColor\x00"))
+	gl.Uniform4f(colorUniform, 1.0, 1.0, 1.0, 1.0)
+
+	// Calculate transform matrix
+	// Convert from screen coordinates to normalized device coordinates
+	// OpenGL uses bottom-left origin, so we need to flip Y
+	flippedY := float32(p.height) - y - height
+
+	// Transform: scale and translate
+	// Scale: width/height to screen size, then to NDC
+	scaleX := (width / float32(p.width)) * 2.0
+	scaleY := (height / float32(p.height)) * 2.0
+	translateX := (x/float32(p.width))*2.0 - 1.0
+	translateY := (flippedY/float32(p.height))*2.0 - 1.0
+
+	// Create 3x3 transform matrix (mat3)
+	transform := [9]float32{
+		scaleX, 0, 0,
+		0, scaleY, 0,
+		translateX, translateY, 1.0,
+	}
+
+	transformUniform := gl.GetUniformLocation(p.shaderProgram, gl.Str("transform\x00"))
+	gl.UniformMatrix3fv(transformUniform, 1, false, &transform[0])
+
+	// Bind and draw quad
+	gl.BindVertexArray(p.quadVAO)
+	gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
+	gl.BindVertexArray(0)
+}
+
+// drawImage renders an image using shader-based rendering (replaces old pixel-by-pixel method)
 func (p *GLPainterType) drawImage(img *image.RGBA, x, y, width, height float32) {
 	if img == nil {
 		return
@@ -299,38 +817,199 @@ func (p *GLPainterType) drawImage(img *image.RGBA, x, y, width, height float32) 
 		return
 	}
 
-	// Enable blending for transparency
-	gl.Enable(gl.BLEND)
-	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-	defer gl.Disable(gl.BLEND)
+	// Ensure we use the actual image size, not the layout-provided size
+	// This prevents text from being stretched when window is resized
+	actualWidth := float32(imgWidth)
+	actualHeight := float32(imgHeight)
 
-	// Use scissor test to clip to the drawing area
-	gl.Enable(gl.SCISSOR_TEST)
-	defer gl.Disable(gl.SCISSOR_TEST)
+	// Get or create texture for this image
+	texture := p.getOrCreateTexture(img)
+	if texture == 0 {
+		return
+	}
 
-	// Set scissor to the entire image area
-	gl.Scissor(int32(x), int32(y), int32(width), int32(height))
+	// Use shader-based rendering
+	p.drawImageWithShader(texture, x, y, actualWidth, actualHeight)
+}
 
-	// Draw image pixels - use actual image size
-	// Draw each pixel as a 1x1 rectangle
-	// Note: y is already in OpenGL coordinates (bottom-left origin)
-	for py := 0; py < imgHeight; py++ {
-		for px := 0; px < imgWidth; px++ {
-			idx := (py*imgWidth + px) * 4
-			if idx+3 < len(img.Pix) {
-				r, g, b, a := img.Pix[idx], img.Pix[idx+1], img.Pix[idx+2], img.Pix[idx+3]
-				if a > 0 { // Only draw non-transparent pixels
-					// Calculate pixel position
-					// x increases to the right, y increases upward in OpenGL
-					drawX := int32(x) + int32(px)
-					// Image is drawn top-to-bottom, but we're at bottom y, so draw upward
-					drawY := int32(y) + int32(imgHeight-1-py)
+// getOrCreateTexture gets or creates a texture for an image
+func (p *GLPainterType) getOrCreateTexture(img *image.RGBA) uint32 {
+	// For now, create a new texture each time (can be optimized with caching)
+	// In a production system, you'd cache textures by image content hash
+	var texture uint32
+	gl.GenTextures(1, &texture)
+	gl.BindTexture(gl.TEXTURE_2D, texture)
 
-					// Draw single pixel
-					gl.Scissor(drawX, drawY, 1, 1)
-					gl.ClearColor(float32(r)/255.0, float32(g)/255.0, float32(b)/255.0, float32(a)/255.0)
-					gl.Clear(gl.COLOR_BUFFER_BIT)
-				}
+	// Set texture parameters
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+	// Upload image data
+	width := img.Bounds().Dx()
+	height := img.Bounds().Dy()
+	gl.TexImage2D(
+		gl.TEXTURE_2D,
+		0,
+		gl.RGBA,
+		int32(width),
+		int32(height),
+		0,
+		gl.RGBA,
+		gl.UNSIGNED_BYTE,
+		gl.Ptr(img.Pix),
+	)
+
+	return texture
+}
+
+// renderTextWithRoboto renders text using a Roboto OpenType font
+func (p *GLPainterType) renderTextWithRoboto(content string, fontFace font.FontFace, fontSize float32) *image.RGBA {
+	if content == "" {
+		return nil
+	}
+
+	// Get the OpenType font
+	faceInterface := fontFace.Face
+	otFace := faceInterface.Face()
+	if otFace == nil {
+		return p.textToImageWithStyle(content, fontSize, false, text.FontWeightRegular)
+	}
+	otFont := otFace.Font
+	if otFont == nil {
+		// Fallback to basicfont
+		return p.textToImageWithStyle(content, fontSize, false, text.FontWeightRegular)
+	}
+
+	// Convert font size (points) to pixels
+	// 1 point = 1/72 inch, assuming 96 DPI: 1 point = 96/72 = 4/3 pixels
+	ppem := fontSize * (96.0 / 72.0)      // pixels per em
+	ppemFixed := fixed.Int26_6(ppem * 64) // Convert to fixed point
+
+	// Use text shaping API to get accurate text measurements
+	runes := []rune(content)
+	input := shaping.Input{
+		Text:      runes,
+		Size:      ppemFixed,
+		Face:      otFace,
+		Direction: di.DirectionLTR,
+		RunStart:  0,
+		RunEnd:    len(runes),
+	}
+
+	// Create a shaper and shape the text
+	shaper := shaping.HarfbuzzShaper{}
+	output := shaper.Shape(input)
+	if len(output.Glyphs) == 0 {
+		// Fallback if shaping fails
+		return p.textToImageWithStyle(content, fontSize, false, text.FontWeightRegular)
+	}
+
+	// Calculate total width from shaped glyphs
+	var totalWidth fixed.Int26_6
+	for _, g := range output.Glyphs {
+		totalWidth += g.XAdvance
+	}
+
+	// Get font metrics from shaping output
+	ascent := output.LineBounds.Ascent
+	descent := output.LineBounds.Descent
+	height := (ascent + descent).Ceil()
+
+	// Create image with proper dimensions
+	imgWidth := totalWidth.Ceil()
+	imgHeight := height
+
+	if imgWidth == 0 || imgHeight == 0 {
+		return nil
+	}
+
+	// Create RGBA image
+	img := image.NewRGBA(image.Rect(0, 0, imgWidth, imgHeight))
+
+	// Render glyphs to image
+	// For now, we'll use a simple approach: render each glyph as a bitmap if available,
+	// otherwise fall back to basicfont rendering
+	var xPos fixed.Int26_6
+	baseline := ascent.Ceil()
+
+	for _, g := range output.Glyphs {
+		// Try to get glyph bitmap data
+		glyphData := otFace.GlyphData(g.GlyphID)
+
+		switch glyphData := glyphData.(type) {
+		case otfontapi.GlyphBitmap:
+			// Render bitmap glyph
+			p.renderBitmapGlyph(img, glyphData, xPos, baseline, g)
+		default:
+			// For vector outlines, we'd need a rasterizer
+			// For now, use basicfont as fallback for individual glyphs
+			// This is a simplified approach - a full implementation would rasterize vector paths
+		}
+
+		xPos += g.XAdvance
+	}
+
+	// If no glyphs were rendered (all were vector outlines), fall back to basicfont
+	// Check if image is empty
+	hasContent := false
+	for _, pix := range img.Pix {
+		if pix != 0 {
+			hasContent = true
+			break
+		}
+	}
+
+	if !hasContent {
+		// Fallback to basicfont with proper sizing
+		return p.textToImageWithStyle(content, fontSize, false, text.FontWeightRegular)
+	}
+
+	return img
+}
+
+// renderBitmapGlyph renders a bitmap glyph to an image
+func (p *GLPainterType) renderBitmapGlyph(img *image.RGBA, glyphData otfontapi.GlyphBitmap, xPos fixed.Int26_6, baseline int, g shaping.Glyph) {
+	// Decode bitmap data based on format
+	var bitmapImg image.Image
+	var err error
+
+	switch glyphData.Format {
+	case otfontapi.PNG:
+		bitmapImg, _, err = image.Decode(bytes.NewReader(glyphData.Data))
+		if err != nil {
+			return
+		}
+	default:
+		// Unsupported format
+		return
+	}
+
+	// Get bitmap bounds
+	bounds := bitmapImg.Bounds()
+	bitmapWidth := bounds.Dx()
+	bitmapHeight := bounds.Dy()
+
+	// Calculate position
+	x := xPos.Ceil() + g.XBearing.Ceil()
+	y := baseline - g.YBearing.Ceil()
+
+	// Draw bitmap to image
+	for by := 0; by < bitmapHeight; by++ {
+		for bx := 0; bx < bitmapWidth; bx++ {
+			imgX := x + bx
+			imgY := y + by
+
+			if imgX >= 0 && imgX < img.Bounds().Dx() && imgY >= 0 && imgY < img.Bounds().Dy() {
+				// Get color from bitmap (convert to RGBA)
+				r, g, b, a := bitmapImg.At(bx, by).RGBA()
+				img.Set(imgX, imgY, color.RGBA{
+					R: uint8(r >> 8),
+					G: uint8(g >> 8),
+					B: uint8(b >> 8),
+					A: uint8(a >> 8),
+				})
 			}
 		}
 	}

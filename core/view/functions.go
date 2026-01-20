@@ -4,12 +4,14 @@ package view
 // These provide a more ergonomic API similar to SwiftUI's ViewBuilder.
 
 // VStack creates a vertical stack of views.
-func VStack(children ...View) View {
+// Returns *VStackType to allow method chaining.
+func VStack(children ...View) *VStackType {
 	return NewVStack(children...)
 }
 
 // HStack creates a horizontal stack of views.
-func HStack(children ...View) View {
+// Returns *HStackType to allow method chaining.
+func HStack(children ...View) *HStackType {
 	return NewHStack(children...)
 }
 
