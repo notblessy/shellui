@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	otfontapi "github.com/go-text/typesetting/font"
@@ -76,26 +77,62 @@ func loadRobotoFonts() ([]FontFace, map[string]FontFace, error) {
 	faces := make([]FontFace, 0)
 	faceMap := make(map[string]FontFace)
 
-	// Load from filesystem
-	assetsPath := "assets/Roboto/static"
-	entries, err := os.ReadDir(assetsPath)
-	if err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".ttf" {
-				data, err := os.ReadFile(filepath.Join(assetsPath, entry.Name()))
-				if err == nil {
-					face, fontName := parseRobotoFont(data, entry.Name())
-					if face.Face != nil {
-						faces = append(faces, face)
-						faceMap[fontName] = face
-					}
-				}
+	// Get the directory of this source file
+	_, filename, _, _ := runtime.Caller(0)
+	packageDir := filepath.Dir(filename)
+
+	// Try multiple possible paths for assets relative to package directory
+	possiblePaths := []string{
+		filepath.Join(packageDir, "../../assets/Roboto/static"),
+		filepath.Join(packageDir, "../../../assets/Roboto/static"),
+		"assets/Roboto/static",          // Current working directory
+		"../../assets/Roboto/static",    // From core/font package
+		"../../../assets/Roboto/static", // From examples
+	}
+
+	var assetsPath string
+	var entries []os.DirEntry
+	var err error
+
+	for _, path := range possiblePaths {
+		// Resolve to absolute path
+		absPath, absErr := filepath.Abs(path)
+		if absErr != nil {
+			continue
+		}
+		entries, err = os.ReadDir(absPath)
+		if err == nil {
+			assetsPath = absPath
+			break
+		}
+	}
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not find Roboto fonts directory (tried: %v): %v", possiblePaths, err)
+	}
+
+	loadedCount := 0
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".ttf" {
+			fullPath := filepath.Join(assetsPath, entry.Name())
+			data, err := os.ReadFile(fullPath)
+			if err != nil {
+				fmt.Printf("Warning: Could not read font file %s: %v\n", fullPath, err)
+				continue // Skip files we can't read
+			}
+			face, fontName := parseRobotoFont(data, entry.Name())
+			if face.Face != nil {
+				faces = append(faces, face)
+				faceMap[fontName] = face
+				loadedCount++
+			} else {
+				fmt.Printf("Warning: Failed to parse font %s\n", entry.Name())
 			}
 		}
 	}
 
-	if len(faces) == 0 {
-		return nil, nil, fmt.Errorf("no Roboto fonts found")
+	if loadedCount == 0 {
+		return nil, nil, fmt.Errorf("no Roboto fonts found in %s", assetsPath)
 	}
 
 	return faces, faceMap, nil
@@ -155,7 +192,7 @@ func parseRobotoFont(data []byte, filename string) (FontFace, string) {
 			Face: face,
 		}, fontName
 	}
-	
+
 	// Convert opentype.Face to our Face interface
 	// Create a wrapper that implements our Face interface
 	wrapper := &opentypeFaceWrapper{face: otFace}

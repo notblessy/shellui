@@ -73,8 +73,13 @@ func NewGLPainter(width, height int) Painter {
 func (p *GLPainterType) loadRobotoFonts() {
 	p.fontOnce.Do(func() {
 		faces, err := font.LoadRoboto()
-		if err == nil {
+		if err != nil {
+			// Log error but don't panic - fallback to basicfont
+			fmt.Printf("Warning: Failed to load Roboto fonts: %v\n", err)
+			p.robotoFonts = nil
+		} else {
 			p.robotoFonts = faces
+			fmt.Printf("Loaded %d Roboto font faces\n", len(faces))
 		}
 	})
 }
@@ -248,14 +253,13 @@ func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) 
 	}
 
 	// Position at top (no vertical centering)
+	// Keep coordinates in screen space (top-left origin) - drawImage will handle conversion to OpenGL
 	textY := y
-
-	// Convert to OpenGL coordinates (bottom-left origin)
-	glX := textX
-	glY := float32(p.height) - (textY + textHeight)
+	// textX is already calculated above based on alignment
 
 	// Draw the entire text image using shader-based rendering
-	p.drawImage(img, glX, glY, textWidth, textHeight)
+	// drawImage expects screen coordinates (top-left origin) and will convert internally
+	p.drawImage(img, textX, textY, textWidth, textHeight)
 }
 
 // measureTextWidth measures the total width of text without rendering it.
@@ -425,16 +429,16 @@ func (p *GLPainterType) drawVStack(vs *view.VStackType, x, y, width, height floa
 	}
 	// If width < 0, use natural/auto width (use available width)
 
-	// Note: stackHeight could be used to constrain layout, but for now
-	// we lay out children naturally. If vs.GetHeight() >= 0, it sets a fixed height.
-	_ = vs.GetHeight() // Height styling is available but not yet used for constraint
-
+	// VStack uses natural height (sum of children) unless explicitly styled
 	// No padding or margin by default (SwiftUI-like)
 	// Children are laid out vertically starting from top
-	currentY := y
+	// First, measure all children to calculate natural height
+	type childInfo struct {
+		view   view.View
+		height float32
+	}
+	childInfos := make([]childInfo, 0, len(children))
 
-	// Stacks don't draw backgrounds - just render children
-	// Each child gets its natural size (width from parent, height from content)
 	for _, child := range children {
 		if child != nil {
 			// Measure child to get natural height
@@ -458,12 +462,21 @@ func (p *GLPainterType) drawVStack(vs *view.VStackType, x, y, width, height floa
 				childHeight = 20 // Fallback height
 			}
 
-			// Render child with natural height (not stretched)
-			p.Paint(child, x, currentY, stackWidth, childHeight)
-
-			// Move to next position
-			currentY += childHeight
+			childInfos = append(childInfos, childInfo{view: child, height: childHeight})
 		}
+	}
+
+	// Render children from top to bottom (first child at top)
+	// Start at y (top of VStack), no centering or spacing
+	currentY := y
+	for i := 0; i < len(childInfos); i++ {
+		info := childInfos[i]
+		// Render child with natural height (not stretched)
+		// Position from top, moving downward
+		p.Paint(info.view, x, currentY, stackWidth, info.height)
+
+		// Move to next position (downward)
+		currentY += info.height
 	}
 }
 
