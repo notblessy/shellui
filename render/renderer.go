@@ -42,4 +42,13 @@ func (r *RendererType) Render(rootView view.View) {
 func (r *RendererType) SetSize(width, height int) {
 	r.width = width
 	r.height = height
+	// Update painter size and DPI scale
+	if glPainter, ok := r.painter.(*GLPainterType); ok {
+		glPainter.SetSize(width, height)
+	}
+}
+
+// GetPainter returns the underlying painter (for platform-specific operations)
+func (r *RendererType) GetPainter() Painter {
+	return r.painter
 }

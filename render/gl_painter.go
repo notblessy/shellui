@@ -42,7 +42,9 @@ type GLPainterType struct {
 	quadVAO       uint32        // VAO for quad rendering
 	quadVBO       uint32        // VBO for quad vertices
 	textRenderer  *textRenderer // Text renderer using go-text/render (Fyne-style)
-	dpiScale      float32       // DPI scale factor
+	dpiScale      float32       // DPI scale factor (framebuffer size / window size)
+	fbWidth       int           // Framebuffer width (physical pixels)
+	fbHeight      int           // Framebuffer height (physical pixels)
 }
 
 // NewGLPainter creates a new OpenGL-based painter.
@@ -54,7 +56,7 @@ func NewGLPainter(width, height int) Painter {
 		},
 		textureCache: make(map[string]uint32),
 		glyphCache:   make(map[glyphCacheKey]glyphCacheEntry),
-		dpiScale:     1.0,
+		dpiScale:     1.0, // Will be updated by SetSize
 	}
 
 	// Initialize text renderer (Fyne-style, uses system fonts)
@@ -64,7 +66,39 @@ func NewGLPainter(width, height int) Painter {
 	p.initShaders()
 	p.initQuad()
 
+	// Initialize framebuffer size (will be set by platform via SetFramebufferSize)
+	p.fbWidth = width
+	p.fbHeight = height
+	p.dpiScale = 1.0
+
 	return p
+}
+
+// SetSize updates the painter size (logical window size)
+func (p *GLPainterType) SetSize(width, height int) {
+	p.width = width
+	p.height = height
+	// DPI scale is calculated from framebuffer size / window size
+	// This is updated separately via SetFramebufferSize
+}
+
+// SetFramebufferSize updates the framebuffer size and recalculates DPI scale
+func (p *GLPainterType) SetFramebufferSize(fbWidth, fbHeight int) {
+	p.fbWidth = fbWidth
+	p.fbHeight = fbHeight
+	// Calculate DPI scale: framebuffer size / window size
+	// For retina displays, this will be 2.0
+	if p.width > 0 && p.height > 0 {
+		scaleX := float32(fbWidth) / float32(p.width)
+		scaleY := float32(fbHeight) / float32(p.height)
+		// Use the average scale (should be the same for both axes)
+		p.dpiScale = (scaleX + scaleY) / 2.0
+		if p.dpiScale < 1.0 {
+			p.dpiScale = 1.0
+		}
+	} else {
+		p.dpiScale = 1.0
+	}
 }
 
 // Note: Roboto font loading removed - now using system fonts via textRenderer
@@ -195,9 +229,16 @@ func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) 
 		return
 	}
 
-	// Get text size
-	textWidth := float32(img.Bounds().Dx())
-	textHeight := float32(img.Bounds().Dy())
+	// Get text size in logical coordinates (not physical pixels)
+	// The image was rendered at physical pixel size, but we need to draw it at logical size
+	// to prevent stretching when window is resized
+	physicalWidth := float32(img.Bounds().Dx())
+	physicalHeight := float32(img.Bounds().Dy())
+
+	// Convert from physical pixels to logical coordinates
+	// If dpiScale is 1.0, they're the same. If dpiScale is 2.0 (retina), divide by 2.
+	logicalWidth := physicalWidth / p.dpiScale
+	logicalHeight := physicalHeight / p.dpiScale
 
 	// Calculate X position based on alignment
 	var textX float32
@@ -205,18 +246,19 @@ func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) 
 	case text.TextAlignLeading:
 		textX = x
 	case text.TextAlignCenter:
-		textX = x + (width-textWidth)/2
+		textX = x + (width-logicalWidth)/2
 	case text.TextAlignTrailing:
-		textX = x + width - textWidth
+		textX = x + width - logicalWidth
 	default:
 		textX = x
 	}
 
 	// Center vertically
-	textY := y + (height-textHeight)/2
+	textY := y + (height-logicalHeight)/2
 
-	// Draw as texture (like Fyne)
-	p.drawImage(img, textX, textY, textWidth, textHeight)
+	// Draw as texture using logical coordinates (not physical pixel size)
+	// This ensures text maintains constant size regardless of window resize
+	p.drawImage(img, textX, textY, logicalWidth, logicalHeight)
 }
 
 // measureTextWidth measures the total width of text without rendering it.

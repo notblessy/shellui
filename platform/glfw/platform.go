@@ -78,15 +78,35 @@ func (s *SceneType) Run() {
 
 	// Set viewport
 	fbWidth, fbHeight := window.GetFramebufferSize()
+	winWidth, winHeight := window.GetSize()
 	gl.Viewport(0, 0, int32(fbWidth), int32(fbHeight))
 
-	// Create renderer with framebuffer size (important for retina displays)
-	renderer := render.NewRenderer(fbWidth, fbHeight)
+	// Create renderer with logical window size (not framebuffer size)
+	// This ensures text maintains constant size regardless of DPI
+	renderer := render.NewRenderer(winWidth, winHeight)
 
-	// Set up window resize callback
+	// Set up window size callback (for logical coordinate updates during resize)
+	// This is called during window resize drag, updating the coordinate system in real-time
+	window.SetSizeCallback(func(w *glfw.Window, winWidth, winHeight int) {
+		// Update renderer with new logical window size immediately
+		// This ensures text maintains constant size during resize drag
+		renderer.SetSize(winWidth, winHeight)
+		// Also update framebuffer size to recalculate DPI scale
+		fbWidth, fbHeight := w.GetFramebufferSize()
+		if glPainter, ok := renderer.GetPainter().(*render.GLPainterType); ok {
+			glPainter.SetFramebufferSize(fbWidth, fbHeight)
+		}
+	})
+
+	// Set up framebuffer size callback (for viewport updates)
+	// This is called when the framebuffer size changes (e.g., on retina displays)
 	window.SetFramebufferSizeCallback(func(w *glfw.Window, fbWidth, fbHeight int) {
+		// Update viewport to match framebuffer size (physical pixels)
 		gl.Viewport(0, 0, int32(fbWidth), int32(fbHeight))
-		renderer.SetSize(fbWidth, fbHeight)
+		// Update framebuffer size in painter to recalculate DPI scale
+		if glPainter, ok := renderer.GetPainter().(*render.GLPainterType); ok {
+			glPainter.SetFramebufferSize(fbWidth, fbHeight)
+		}
 	})
 
 	// Set up callbacks
