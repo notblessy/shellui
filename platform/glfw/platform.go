@@ -5,7 +5,10 @@ import (
 
 	"github.com/go-gl/gl/v4.1-core/gl"
 	"github.com/go-gl/glfw/v3.3/glfw"
+	"github.com/notblessy/shellui/core/canvas"
+	"github.com/notblessy/shellui/core/scale"
 	"github.com/notblessy/shellui/core/scene"
+	"github.com/notblessy/shellui/core/view"
 	"github.com/notblessy/shellui/render"
 )
 
@@ -81,32 +84,53 @@ func (s *SceneType) Run() {
 	winWidth, winHeight := window.GetSize()
 	gl.Viewport(0, 0, int32(fbWidth), int32(fbHeight))
 
-	// Create renderer with logical window size (not framebuffer size)
-	// This ensures text maintains constant size regardless of DPI
-	renderer := render.NewRenderer(winWidth, winHeight)
+	// Create canvas with initial size in logical coordinates
+	cnv := canvas.NewCanvas()
+	initialCanvasSize := computeCanvasSize(cnv, winWidth, winHeight)
+	cnv.Resize(initialCanvasSize)
 
-	// Set up window size callback (for logical coordinate updates during resize)
-	// This is called during window resize drag, updating the coordinate system in real-time
+	// Set the root view as canvas content
+	rootView := s.userScene.Body()
+	cnv.SetContent(rootView)
+
+	// Create renderer with canvas
+	renderer := render.NewRenderer(cnv)
+
+	// Calculate and set texture scale (HiDPI support)
+	texScale := detectTextureScale(winWidth, fbWidth)
+	cnv.SetTexScale(texScale)
+
+	// Flag to prevent double rendering (resize callback renders, main loop skips)
+	resizeRendered := false
+
+	// Set up window size callback
+	// Converts window size to canvas size and resizes canvas
 	window.SetSizeCallback(func(w *glfw.Window, winWidth, winHeight int) {
-		// Update renderer with new logical window size immediately
-		// This ensures text maintains constant size during resize drag
-		renderer.SetSize(winWidth, winHeight)
-		// Also update framebuffer size to recalculate DPI scale
+		// Update viewport
 		fbWidth, fbHeight := w.GetFramebufferSize()
-		if glPainter, ok := renderer.GetPainter().(*render.GLPainterType); ok {
-			glPainter.SetFramebufferSize(fbWidth, fbHeight)
-		}
+		gl.Viewport(0, 0, int32(fbWidth), int32(fbHeight))
+
+		// Update canvas
+		canvasSize := computeCanvasSize(cnv, winWidth, winHeight)
+		renderer.ResizeCanvas(canvasSize)
+
+		// Render immediately to prevent OS from stretching old frame
+		renderer.Render()
+		w.SwapBuffers()
+
+		// Mark that we already rendered this frame
+		resizeRendered = true
 	})
 
-	// Set up framebuffer size callback (for viewport updates)
-	// This is called when the framebuffer size changes (e.g., on retina displays)
+	// Set up framebuffer size callback (for viewport and texture scale updates)
 	window.SetFramebufferSizeCallback(func(w *glfw.Window, fbWidth, fbHeight int) {
-		// Update viewport to match framebuffer size (physical pixels)
+		// Update OpenGL viewport to match framebuffer size (physical pixels)
 		gl.Viewport(0, 0, int32(fbWidth), int32(fbHeight))
-		// Update framebuffer size in painter to recalculate DPI scale
-		if glPainter, ok := renderer.GetPainter().(*render.GLPainterType); ok {
-			glPainter.SetFramebufferSize(fbWidth, fbHeight)
-		}
+
+		// Update texture scale for HiDPI rendering
+		winWidth, _ := w.GetSize()
+		texScale := detectTextureScale(winWidth, fbWidth)
+		cnv.SetTexScale(texScale)
 	})
 
 	// Set up callbacks
@@ -116,21 +140,38 @@ func (s *SceneType) Run() {
 
 	// Main loop
 	for !window.ShouldClose() {
-		// Poll events
+		// Poll events (this may trigger resize callback which renders)
 		glfw.PollEvents()
 
-		// Render the view tree
-		// Get the view from the scene (this is the root view, e.g., VStack)
-		rootView := s.userScene.Body()
-		if rootView != nil {
-			// Render the view tree using the new renderer
-			// The renderer will clear the screen
-			renderer.Render(rootView)
+		// Skip render if resize callback already rendered this frame
+		if resizeRendered {
+			resizeRendered = false
+			continue
 		}
+
+		// Render the canvas
+		renderer.Render()
 
 		// Swap buffers
 		window.SwapBuffers()
 	}
+}
+
+// computeCanvasSize converts window size (screen pixels) to canvas size (logical coordinates).
+func computeCanvasSize(c *canvas.Canvas, width, height int) view.Size {
+	return view.Size{
+		Width:  scale.ToCanvasCoordinate(c, width),
+		Height: scale.ToCanvasCoordinate(c, height),
+	}
+}
+
+// detectTextureScale calculates the texture scale from window and framebuffer sizes.
+// This is the HiDPI scale factor (e.g., 2.0 on Retina displays).
+func detectTextureScale(winWidth, fbWidth int) float32 {
+	if winWidth == 0 {
+		return 1.0
+	}
+	return float32(fbWidth) / float32(winWidth)
 }
 
 // GetWindow returns the GLFW window (for future use).

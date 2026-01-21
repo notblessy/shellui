@@ -53,6 +53,43 @@ func (vs *VStackType) Body() View {
 	return children[0]
 }
 
+// MinSize returns the minimum size of the VStack.
+// If width is fixed (>= 0), uses that. Otherwise calculates from children.
+// Height is sum of children's heights.
+func (vs *VStackType) MinSize() Size {
+	children := vs.GetChildren()
+	if len(children) == 0 {
+		return Size{Width: 0, Height: 0}
+	}
+
+	var maxWidth float32 = 0
+	var totalHeight float32 = 0
+
+	for _, child := range children {
+		if child != nil {
+			childSize := child.MinSize()
+			if childSize.Width > maxWidth {
+				maxWidth = childSize.Width
+			}
+			totalHeight += childSize.Height
+		}
+	}
+
+	// Use fixed width if specified, otherwise use calculated maxWidth
+	width := maxWidth
+	if vs.width >= 0 {
+		width = vs.width
+	}
+
+	// Use fixed height if specified, otherwise use calculated totalHeight
+	height := totalHeight
+	if vs.height >= 0 {
+		height = vs.height
+	}
+
+	return Size{Width: width, Height: height}
+}
+
 // HStackType arranges views horizontally.
 // Default: width 100%, height auto (natural)
 type HStackType struct {
@@ -104,6 +141,42 @@ func (hs *HStackType) Body() View {
 	return children[0]
 }
 
+// MinSize returns the minimum size of the HStack.
+// If width/height are fixed (>= 0), uses those. Otherwise calculates from children.
+func (hs *HStackType) MinSize() Size {
+	children := hs.GetChildren()
+	if len(children) == 0 {
+		return Size{Width: 0, Height: 0}
+	}
+
+	var totalWidth float32 = 0
+	var maxHeight float32 = 0
+
+	for _, child := range children {
+		if child != nil {
+			childSize := child.MinSize()
+			totalWidth += childSize.Width
+			if childSize.Height > maxHeight {
+				maxHeight = childSize.Height
+			}
+		}
+	}
+
+	// Use fixed width if specified, otherwise use calculated totalWidth
+	width := totalWidth
+	if hs.width >= 0 {
+		width = hs.width
+	}
+
+	// Use fixed height if specified, otherwise use calculated maxHeight
+	height := maxHeight
+	if hs.height >= 0 {
+		height = hs.height
+	}
+
+	return Size{Width: width, Height: height}
+}
+
 // ZStackType arranges views in layers (stacked on top of each other).
 type ZStackType struct {
 	ViewBaseType
@@ -125,6 +198,32 @@ func (zs *ZStackType) Body() View {
 	return children[0]
 }
 
+// MinSize returns the minimum size of the ZStack.
+// For ZStack, this is the size of the largest child (since they overlap).
+func (zs *ZStackType) MinSize() Size {
+	children := zs.GetChildren()
+	if len(children) == 0 {
+		return Size{Width: 0, Height: 0}
+	}
+
+	var maxWidth float32 = 0
+	var maxHeight float32 = 0
+
+	for _, child := range children {
+		if child != nil {
+			childSize := child.MinSize()
+			if childSize.Width > maxWidth {
+				maxWidth = childSize.Width
+			}
+			if childSize.Height > maxHeight {
+				maxHeight = childSize.Height
+			}
+		}
+	}
+
+	return Size{Width: maxWidth, Height: maxHeight}
+}
+
 // SpacerType is a view that takes up available space.
 type SpacerType struct {
 	ViewBaseType
@@ -138,4 +237,9 @@ func NewSpacer() *SpacerType {
 // Body returns nil for SpacerType.
 func (s *SpacerType) Body() View {
 	return nil
+}
+
+// MinSize returns (0, 0) for SpacerType since it's flexible and fills available space.
+func (s *SpacerType) MinSize() Size {
+	return Size{Width: 0, Height: 0}
 }

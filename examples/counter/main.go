@@ -22,6 +22,7 @@ func (a *CounterApp) Body() scene.Scene {
 
 // CounterView demonstrates reactive state.
 type CounterView struct {
+	view.ViewBaseType
 	Count *state.StateType[int]
 }
 

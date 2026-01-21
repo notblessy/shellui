@@ -111,6 +111,18 @@ func (t *TextType) IsBold() bool {
 	return t.bold
 }
 
+// MinSize returns the minimum size needed to display this text without stretching.
+// This is the natural size of the text in logical pixels.
+func (t *TextType) MinSize() view.Size {
+	fontSize := t.size
+	if fontSize <= 0 {
+		fontSize = 16 // Default font size
+	}
+	
+	// Use the global text measurer (registered by the painter)
+	return view.MeasureText(t.content, fontSize, t.bold, false)
+}
+
 // Text is a convenience function for creating text views.
 // Returns *TextType to allow method chaining.
 func Text(content string) *TextType {

@@ -15,7 +15,7 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
-// textRenderer handles text rendering using go-text/render (following Fyne's pattern)
+// textRenderer handles text rendering using go-text/render
 type textRenderer struct {
 	fontMap *fontscan.FontMap
 	mu      sync.RWMutex
@@ -67,7 +67,7 @@ func (tr *textRenderer) getFontFace(family string, bold, italic bool) shaping.Fo
 	return &simpleFontMap{fontMap: tr.fontMap}
 }
 
-// renderTextToImage renders text to an image (following Fyne's DrawString pattern)
+// renderTextToImage renders text to an image
 func (tr *textRenderer) renderTextToImage(
 	text string,
 	fontSize float32,
@@ -82,7 +82,7 @@ func (tr *textRenderer) renderTextToImage(
 	// Get font face
 	fontFace := tr.getFontFace(fontscan.SansSerif, bold, italic)
 
-	// Create renderer (like Fyne)
+	// Create renderer
 	r := render.Renderer{
 		FontSize: fontSize,
 		PixScale: scale,
@@ -124,11 +124,11 @@ func (tr *textRenderer) renderTextToImage(
 	// Create image
 	img := image.NewNRGBA(image.Rect(0, 0, width, height))
 
-	// Calculate Y position (baseline) - following Fyne's approach
+	// Calculate Y position (baseline)
 	ascent := fixed266ToFloat32(output.LineBounds.Ascent)
 	y := int(math.Ceil(float64(ascent * scale)))
 
-	// Render text using walkString pattern (like Fyne)
+	// Render text using walkString pattern
 	advance := float32(0)
 	walkString(fontFace, text, textSize, &advance, scale, func(run shaping.Output, x float32) {
 		if len(run.Glyphs) == 1 {
@@ -143,6 +143,71 @@ func (tr *textRenderer) renderTextToImage(
 	})
 
 	return img
+}
+
+// measureTextSize measures text size without rendering
+// Returns size in logical pixels (not physical pixels)
+func (tr *textRenderer) measureTextSize(
+	text string,
+	fontSize float32,
+	bold, italic bool,
+) (width, height float32) {
+	if text == "" {
+		return 0, 0
+	}
+
+	// Get font face
+	fontFace := tr.getFontFace(fontscan.SansSerif, bold, italic)
+
+	// Convert text to runes
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return 0, 0
+	}
+
+	// Measure text size
+	textSize := fixed.Int26_6(fontSize * 64)
+
+	// Resolve font face - try multiple runes if needed
+	resolvedFace := fontFace.ResolveFace(' ')
+	if resolvedFace == nil {
+		for _, testRune := range []rune{'a', 'A', '0', 'e', 'E'} {
+			resolvedFace = fontFace.ResolveFace(testRune)
+			if resolvedFace != nil {
+				break
+			}
+		}
+	}
+	if resolvedFace == nil {
+		return 0, 0
+	}
+
+	input := shaping.Input{
+		Text:      runes,
+		RunStart:  0,
+		RunEnd:    len(runes),
+		Direction: di.DirectionLTR,
+		Face:      resolvedFace,
+		Size:      textSize,
+	}
+
+	shaper := &shaping.HarfbuzzShaper{}
+	output := shaper.Shape(input)
+
+	// Check if shaping produced any glyphs
+	if len(output.Glyphs) == 0 {
+		return 0, 0
+	}
+
+	// Calculate size in logical pixels (not scaled by DPI)
+	// The advance gives us the width
+	width = fixed266ToFloat32(output.Advance)
+	
+	// Line thickness gives us the height
+	lineThickness := fixed266ToFloat32(output.LineBounds.LineThickness())
+	height = lineThickness
+
+	return width, height
 }
 
 // renderTextToImageRGBA renders text and returns RGBA (for compatibility with drawImage)
@@ -164,7 +229,7 @@ func (tr *textRenderer) renderTextToImageRGBA(
 	return rgba
 }
 
-// walkString walks through text and calls callback for each shaped run (simplified Fyne pattern)
+// walkString walks through text and calls callback for each shaped run
 func walkString(
 	faces shaping.Fontmap,
 	s string,

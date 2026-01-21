@@ -2,28 +2,28 @@ package render
 
 import (
 	"github.com/go-gl/gl/v4.1-core/gl"
+	"github.com/notblessy/shellui/core/canvas"
 	"github.com/notblessy/shellui/core/view"
 )
 
 // RendererType handles rendering of views.
-// This is a wrapper around the Painter interface for backward compatibility.
+// It owns a Canvas and coordinates between the canvas and painter.
 type RendererType struct {
+	canvas  *canvas.Canvas
 	painter Painter
-	width   int
-	height  int
 }
 
-// NewRenderer creates a new renderer.
-func NewRenderer(width, height int) *RendererType {
+// NewRenderer creates a new renderer with the given canvas.
+func NewRenderer(cnv *canvas.Canvas) *RendererType {
 	return &RendererType{
-		painter: NewGLPainter(width, height),
-		width:   width,
-		height:  height,
+		canvas:  cnv,
+		painter: NewGLPainter(cnv),
 	}
 }
 
-// Render renders a view tree.
-func (r *RendererType) Render(rootView view.View) {
+// Render renders the canvas content.
+// Uses canvas size (logical coordinates) for stable rendering.
+func (r *RendererType) Render() {
 	// Enable blending
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
@@ -31,21 +31,27 @@ func (r *RendererType) Render(rootView view.View) {
 	// Clear the screen
 	r.painter.Clear()
 
-	// Render the root view
-	if rootView != nil {
-		// Get view size (for now, use full window)
-		r.painter.Paint(rootView, 0, 0, float32(r.width), float32(r.height))
+	// Render the canvas content
+	content := r.canvas.Content()
+	if content != nil {
+		// Get canvas size and content position (accounting for padding)
+		canvasSize := r.canvas.Size()
+		contentPos := r.canvas.ContentPos()
+		
+		// Paint the content at the content position with canvas size
+		r.painter.Paint(content, contentPos.X, contentPos.Y, canvasSize.Width, canvasSize.Height)
 	}
 }
 
-// SetSize updates the renderer size.
-func (r *RendererType) SetSize(width, height int) {
-	r.width = width
-	r.height = height
-	// Update painter size and DPI scale
-	if glPainter, ok := r.painter.(*GLPainterType); ok {
-		glPainter.SetSize(width, height)
-	}
+// ResizeCanvas updates the canvas size.
+// This is called when the window is resized.
+func (r *RendererType) ResizeCanvas(size view.Size) {
+	r.canvas.Resize(size)
+}
+
+// GetCanvas returns the canvas.
+func (r *RendererType) GetCanvas() *canvas.Canvas {
+	return r.canvas
 }
 
 // GetPainter returns the underlying painter (for platform-specific operations)

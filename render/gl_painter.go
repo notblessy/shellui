@@ -17,6 +17,14 @@ import (
 	"github.com/notblessy/shellui/widget/text"
 )
 
+// CanvasScaler is an interface for objects that provide scale information.
+type CanvasScaler interface {
+	Scale() float32
+	TexScale() float32
+	PixScale() float32
+	Size() view.Size
+}
+
 // glyphCacheEntry stores a cached glyph texture, image, and its metrics
 type glyphCacheEntry struct {
 	texture uint32
@@ -41,64 +49,61 @@ type GLPainterType struct {
 	shaderProgram uint32        // Shader program for texture rendering
 	quadVAO       uint32        // VAO for quad rendering
 	quadVBO       uint32        // VBO for quad vertices
-	textRenderer  *textRenderer // Text renderer using go-text/render (Fyne-style)
-	dpiScale      float32       // DPI scale factor (framebuffer size / window size)
-	fbWidth       int           // Framebuffer width (physical pixels)
-	fbHeight      int           // Framebuffer height (physical pixels)
+	textRenderer  *textRenderer // Text renderer using go-text/render
+	canvas        CanvasScaler  // Canvas reference for scale information
 }
 
-// NewGLPainter creates a new OpenGL-based painter.
-func NewGLPainter(width, height int) Painter {
+// NewGLPainter creates a new OpenGL-based painter with a canvas reference.
+func NewGLPainter(canvas CanvasScaler) Painter {
+	canvasSize := canvas.Size()
 	p := &GLPainterType{
 		PainterType: PainterType{
-			width:  width,
-			height: height,
+			width:  int(canvasSize.Width),
+			height: int(canvasSize.Height),
 		},
 		textureCache: make(map[string]uint32),
 		glyphCache:   make(map[glyphCacheKey]glyphCacheEntry),
-		dpiScale:     1.0, // Will be updated by SetSize
+		canvas:       canvas,
 	}
 
-	// Initialize text renderer (Fyne-style, uses system fonts)
+	// Initialize text renderer (uses system fonts)
 	p.textRenderer = getTextRenderer()
 
 	// Initialize shaders and quad rendering
 	p.initShaders()
 	p.initQuad()
 
-	// Initialize framebuffer size (will be set by platform via SetFramebufferSize)
-	p.fbWidth = width
-	p.fbHeight = height
-	p.dpiScale = 1.0
+	// Register this painter as the global text measurer
+	// This allows views to measure text without importing the render package
+	view.SetTextMeasurer(p)
 
 	return p
 }
 
-// SetSize updates the painter size (logical window size)
+// SetSize updates the painter size (no longer needed with canvas).
+// Kept for compatibility but does nothing.
 func (p *GLPainterType) SetSize(width, height int) {
 	p.width = width
 	p.height = height
-	// DPI scale is calculated from framebuffer size / window size
-	// This is updated separately via SetFramebufferSize
 }
 
-// SetFramebufferSize updates the framebuffer size and recalculates DPI scale
-func (p *GLPainterType) SetFramebufferSize(fbWidth, fbHeight int) {
-	p.fbWidth = fbWidth
-	p.fbHeight = fbHeight
-	// Calculate DPI scale: framebuffer size / window size
-	// For retina displays, this will be 2.0
-	if p.width > 0 && p.height > 0 {
-		scaleX := float32(fbWidth) / float32(p.width)
-		scaleY := float32(fbHeight) / float32(p.height)
-		// Use the average scale (should be the same for both axes)
-		p.dpiScale = (scaleX + scaleY) / 2.0
-		if p.dpiScale < 1.0 {
-			p.dpiScale = 1.0
-		}
-	} else {
-		p.dpiScale = 1.0
+// MeasureText implements the view.TextMeasurer interface.
+// Returns the natural size of text in logical pixels.
+func (p *GLPainterType) MeasureText(content string, fontSize float32, bold, italic bool) view.Size {
+	if content == "" || p.textRenderer == nil {
+		return view.Size{Width: 0, Height: 0}
 	}
+	if fontSize <= 0 {
+		fontSize = 16 // Default font size
+	}
+	width, height := p.textRenderer.measureTextSize(content, fontSize, bold, italic)
+	return view.Size{Width: width, Height: height}
+}
+
+// SetFramebufferSize is kept for compatibility but no longer used.
+// The canvas now manages texture scale directly.
+func (p *GLPainterType) SetFramebufferSize(fbWidth, fbHeight int) {
+	// No-op: canvas manages texture scale
 }
 
 // Note: Roboto font loading removed - now using system fonts via textRenderer
@@ -190,7 +195,28 @@ func (p *GLPainterType) drawObject(v view.View, x, y, width, height float32) {
 	}
 }
 
-// drawText renders a text widget (following Fyne's pattern: text -> image -> texture)
+// measureTextMinSize measures the natural size of text in logical pixels
+func (p *GLPainterType) measureTextMinSize(t *text.TextType) view.Size {
+	content := t.GetContent()
+	if content == "" || p.textRenderer == nil {
+		return view.Size{Width: 0, Height: 0}
+	}
+
+	fontSize := t.GetSize()
+	if fontSize == 0 {
+		fontSize = 16 // Default font size
+	}
+
+	isBold := t.IsBold() || t.GetWeight() == text.FontWeightBold
+	isItalic := false
+
+	// Measure text size in logical pixels (not physical)
+	width, height := p.textRenderer.measureTextSize(content, fontSize, isBold, isItalic)
+	return view.Size{Width: width, Height: height}
+}
+
+// drawText renders a text widget (text -> image -> texture)
+// Text is NEVER stretched - it always uses its natural size
 func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) {
 	content := t.GetContent()
 	if content == "" {
@@ -210,7 +236,7 @@ func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) 
 	isBold := t.IsBold() || t.GetWeight() == text.FontWeightBold
 	isItalic := false // Add italic support if needed
 
-	// Render text to image using go-text/render (Fyne-style)
+	// Render text to image using go-text/render
 	if p.textRenderer == nil {
 		// Fallback if renderer not initialized
 		return
@@ -222,7 +248,7 @@ func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) 
 		textColor,
 		isBold,
 		isItalic,
-		p.dpiScale,
+		p.canvas.PixScale(),
 	)
 
 	if img == nil {
@@ -236,9 +262,14 @@ func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) 
 	physicalHeight := float32(img.Bounds().Dy())
 
 	// Convert from physical pixels to logical coordinates
-	// If dpiScale is 1.0, they're the same. If dpiScale is 2.0 (retina), divide by 2.
-	logicalWidth := physicalWidth / p.dpiScale
-	logicalHeight := physicalHeight / p.dpiScale
+	// Using canvas.PixScale() which is scale * texScale
+	pixScale := p.canvas.PixScale()
+	logicalWidth := physicalWidth / pixScale
+	logicalHeight := physicalHeight / pixScale
+
+	// Text is NEVER stretched - always use its natural size
+	// The width/height parameters are ignored for text rendering
+	// This ensures text maintains constant size regardless of container size
 
 	// Calculate X position based on alignment
 	var textX float32
@@ -256,8 +287,7 @@ func (p *GLPainterType) drawText(t *text.TextType, x, y, width, height float32) 
 	// Center vertically
 	textY := y + (height-logicalHeight)/2
 
-	// Draw as texture using logical coordinates (not physical pixel size)
-	// This ensures text maintains constant size regardless of window resize
+	// Draw using natural size (never stretched)
 	p.drawImage(img, textX, textY, logicalWidth, logicalHeight)
 }
 
@@ -411,161 +441,193 @@ func (p *GLPainterType) drawButton(b *button.ButtonType, x, y, width, height flo
 }
 
 // drawVStack renders a vertical stack.
-// VStack default: height 100%, width auto, no padding/margin
-// Children are laid out vertically with natural sizing (not stretched).
+// VStack: if width not set (auto), sizes to fit content (like HTML)
+// Fixed sizes are respected and never responsive to window size
 func (p *GLPainterType) drawVStack(vs *view.VStackType, x, y, width, height float32) {
 	children := vs.GetChildren()
 	if len(children) == 0 {
 		return
 	}
 
-	// Apply width/height styling
-	stackWidth := width
-
-	if vs.GetWidth() >= 0 {
-		// Fixed width specified
-		stackWidth = vs.GetWidth()
-	}
-	// If width < 0, use natural/auto width (use available width)
-
-	// VStack uses natural height (sum of children) unless explicitly styled
-	// No padding or margin by default (SwiftUI-like)
-	// Children are laid out vertically starting from top
-	// First, measure all children to calculate natural height
+	// Measure all children to calculate natural sizes
 	type childInfo struct {
 		view   view.View
+		size   view.Size
 		height float32
 	}
 	childInfos := make([]childInfo, 0, len(children))
 
+	maxChildWidth := float32(0)
+	totalHeight := float32(0)
+
 	for _, child := range children {
 		if child != nil {
-			// Measure child to get natural height
-			var childHeight float32
+			// Get child's natural size using MinSize()
+			var childSize view.Size
 			if textChild, ok := child.(*text.TextType); ok {
-				// Measure text to get natural height
-				content := textChild.GetContent()
-				if content != "" && p.textRenderer != nil {
-					fontSize := textChild.GetSize()
-					if fontSize == 0 {
-						fontSize = 16
-					}
-					isBold := textChild.IsBold() || textChild.GetWeight() == text.FontWeightBold
-					img := p.textRenderer.renderTextToImageRGBA(
-						content,
-						fontSize,
-						&color.RGBA{R: 0, G: 0, B: 0, A: 255},
-						isBold,
-						false,
-						p.dpiScale,
-					)
-					if img != nil {
-						childHeight = float32(img.Bounds().Dy())
-					} else {
-						childHeight = 20 // Fallback
-					}
-				} else {
-					childHeight = 20 // Fallback
-				}
+				// Measure text using MinSize
+				childSize = p.measureTextMinSize(textChild)
 			} else {
-				// For other view types, use a reasonable default
-				// A proper layout engine would measure all children first
-				childHeight = 20 // Fallback height
+				// For other view types, use their MinSize()
+				childSize = child.MinSize()
 			}
 
-			childInfos = append(childInfos, childInfo{view: child, height: childHeight})
+			// Track maximum child width for auto-width calculation
+			if childSize.Width > maxChildWidth {
+				maxChildWidth = childSize.Width
+			}
+
+			childHeight := childSize.Height
+			if childHeight <= 0 {
+				childHeight = 20 // Fallback
+			}
+			totalHeight += childHeight
+
+			childInfos = append(childInfos, childInfo{
+				view:   child,
+				size:   childSize,
+				height: childHeight,
+			})
 		}
 	}
 
-	// Render children from top to bottom (first child at top)
-	// Start at y (top of VStack), no centering or spacing
+	// Determine stack width
+	stackWidth := width
+	if vs.GetWidth() >= 0 {
+		// Fixed width specified - use it (not responsive to window)
+		stackWidth = vs.GetWidth()
+	} else {
+		// Auto width: use maximum child width (like HTML)
+		stackWidth = maxChildWidth
+		if stackWidth <= 0 {
+			stackWidth = width // Fallback to available width
+		}
+	}
+
+	// Render children from top to bottom
+	// Ensure proper spacing - each child uses its natural size and doesn't overlap
 	currentY := y
 	for i := 0; i < len(childInfos); i++ {
 		info := childInfos[i]
-		// Render child with natural height (not stretched)
-		// Position from top, moving downward
-		p.Paint(info.view, x, currentY, stackWidth, info.height)
+		// Render child with its natural size (never stretched)
+		// For text, use its natural width (not stackWidth) to prevent overlap
+		// Pass stackWidth only for alignment purposes, text will use its natural width
+		childWidth := info.size.Width
+		if childWidth <= 0 {
+			childWidth = stackWidth // Fallback
+		}
+		// Ensure child doesn't exceed stack width
+		if childWidth > stackWidth && stackWidth > 0 {
+			childWidth = stackWidth
+		}
 
-		// Move to next position (downward)
+		p.Paint(info.view, x, currentY, childWidth, info.height)
+
+		// Move to next position (downward) - ensure no overlap
 		currentY += info.height
 	}
 }
 
 // drawHStack renders a horizontal stack.
-// HStack default: width 100%, height auto, no padding/margin
-// Children are laid out horizontally with natural sizing (not stretched).
+// HStack: if width/height not set (auto), sizes to fit content
+// Fixed sizes are respected and never responsive to window size
 func (p *GLPainterType) drawHStack(hs *view.HStackType, x, y, width, height float32) {
 	children := hs.GetChildren()
 	if len(children) == 0 {
 		return
 	}
 
-	// Apply width/height styling
-	stackWidth := width
-	stackHeight := height
-
-	if hs.GetWidth() >= 0 {
-		// Fixed width specified
-		stackWidth = hs.GetWidth()
+	// Measure all children to calculate natural sizes
+	type childInfo struct {
+		view  view.View
+		size  view.Size
+		width float32
 	}
-	// If width < 0, use natural/auto width (defaults to 100% of available, which is already set)
+	childInfos := make([]childInfo, 0, len(children))
 
-	if hs.GetHeight() >= 0 {
-		// Fixed height specified
-		stackHeight = hs.GetHeight()
-	}
-	// If height < 0, use natural/auto height (use available height)
+	maxChildHeight := float32(0)
+	totalWidth := float32(0)
 
-	// No padding or margin by default (SwiftUI-like)
-	// Children are laid out horizontally starting from left
-	currentX := x
-
-	// Stacks don't draw backgrounds - just render children
-	// Each child gets its natural width (height from parent)
 	for _, child := range children {
 		if child != nil {
-			// Measure child to get natural width
-			var childWidth float32
+			// Get child's natural size using MinSize()
+			var childSize view.Size
 			if textChild, ok := child.(*text.TextType); ok {
-				// Measure text to get natural width
-				content := textChild.GetContent()
-				if content != "" && p.textRenderer != nil {
-					fontSize := textChild.GetSize()
-					if fontSize == 0 {
-						fontSize = 16
-					}
-					isBold := textChild.IsBold() || textChild.GetWeight() == text.FontWeightBold
-					img := p.textRenderer.renderTextToImageRGBA(
-						content,
-						fontSize,
-						&color.RGBA{R: 0, G: 0, B: 0, A: 255},
-						isBold,
-						false,
-						p.dpiScale,
-					)
-					if img != nil {
-						childWidth = float32(img.Bounds().Dx())
-					} else {
-						childWidth = 50 // Fallback
-					}
-				} else {
-					childWidth = 50 // Fallback
-				}
+				// Measure text using MinSize
+				childSize = p.measureTextMinSize(textChild)
 			} else if _, ok := child.(*view.SpacerType); ok {
-				// Spacer takes remaining space
-				remainingWidth := stackWidth - (currentX - x)
-				childWidth = remainingWidth
+				// Spacer - will be handled separately
+				childSize = view.Size{Width: 0, Height: 0}
 			} else {
-				// For other view types, use a reasonable default
-				childWidth = 50 // Fallback width
+				// For other view types, use their MinSize()
+				childSize = child.MinSize()
 			}
 
-			// Render child with natural width (not stretched)
-			p.Paint(child, currentX, y, childWidth, stackHeight)
+			// Track maximum child height for auto-height calculation
+			if childSize.Height > maxChildHeight {
+				maxChildHeight = childSize.Height
+			}
 
-			// Move to next position
-			currentX += childWidth
+			childWidth := childSize.Width
+			if childWidth <= 0 {
+				childWidth = 50 // Fallback
+			}
+			totalWidth += childWidth
+
+			childInfos = append(childInfos, childInfo{
+				view:  child,
+				size:  childSize,
+				width: childWidth,
+			})
 		}
+	}
+
+	// Determine stack width
+	stackWidth := width
+	if hs.GetWidth() >= 0 {
+		// Fixed width specified - use it (not responsive to window)
+		stackWidth = hs.GetWidth()
+	} else {
+		// Auto width: use sum of child widths (like HTML)
+		stackWidth = totalWidth
+		if stackWidth <= 0 {
+			stackWidth = width // Fallback to available width
+		}
+	}
+
+	// Determine stack height
+	stackHeight := height
+	if hs.GetHeight() >= 0 {
+		// Fixed height specified - use it (not responsive to window)
+		stackHeight = hs.GetHeight()
+	} else {
+		// Auto height: use maximum child height (like HTML)
+		stackHeight = maxChildHeight
+		if stackHeight <= 0 {
+			stackHeight = height // Fallback to available height
+		}
+	}
+
+	// Render children from left to right
+	currentX := x
+	for i := 0; i < len(childInfos); i++ {
+		info := childInfos[i]
+
+		// Handle spacer - takes remaining space
+		if _, ok := info.view.(*view.SpacerType); ok {
+			remainingWidth := stackWidth - (currentX - x)
+			if remainingWidth > 0 {
+				// Spacer takes remaining space but doesn't render anything
+				currentX += remainingWidth
+			}
+			continue
+		}
+
+		// Render child with its natural size (never stretched)
+		p.Paint(info.view, currentX, y, info.width, stackHeight)
+
+		// Move to next position
+		currentX += info.width
 	}
 }
 
@@ -786,10 +848,9 @@ func (p *GLPainterType) getTextTexture(content string, img *image.RGBA) uint32 {
 	return texture
 }
 
-// drawImage draws an image directly to the screen (simple approach).
-// Renders to image first, then draws. Can be upgraded to use textures and shaders later for better performance.
-// width and height parameters should match the actual image size - image is never scaled.
-// drawImageWithShader renders an image using shader-based quad rendering
+// drawImageWithShader renders an image using shader-based quad rendering.
+// Uses stable canvas size for NDC conversion to prevent stretching during resize.
+// x, y, width, height are in logical (device-independent) coordinates.
 func (p *GLPainterType) drawImageWithShader(texture uint32, x, y, width, height float32) {
 	// Enable blending for transparency
 	gl.Enable(gl.BLEND)
@@ -811,17 +872,23 @@ func (p *GLPainterType) drawImageWithShader(texture uint32, x, y, width, height 
 	colorUniform := gl.GetUniformLocation(p.shaderProgram, gl.Str("uColor\x00"))
 	gl.Uniform4f(colorUniform, 1.0, 1.0, 1.0, 1.0)
 
-	// Calculate transform matrix
-	// Convert from screen coordinates to normalized device coordinates
-	// OpenGL uses bottom-left origin, so we need to flip Y
-	flippedY := float32(p.height) - y - height
+	// Use canvas size for coordinate conversion
+	// Canvas size is in stable logical coordinates
+	canvasSize := p.canvas.Size()
+	canvasW := canvasSize.Width
+	canvasH := canvasSize.Height
 
-	// Transform: scale and translate
-	// Scale: width/height to screen size, then to NDC
-	scaleX := (width / float32(p.width)) * 2.0
-	scaleY := (height / float32(p.height)) * 2.0
-	translateX := (x/float32(p.width))*2.0 - 1.0
-	translateY := (flippedY/float32(p.height))*2.0 - 1.0
+	// Calculate transform matrix
+	// Convert from logical coordinates to normalized device coordinates (NDC)
+	// OpenGL uses bottom-left origin, so we need to flip Y
+	flippedY := canvasH - y - height
+
+	// Transform: scale and translate to NDC (-1 to 1)
+	// Using canvas size ensures coordinates are stable
+	scaleX := (width / canvasW) * 2.0
+	scaleY := (height / canvasH) * 2.0
+	translateX := (x/canvasW)*2.0 - 1.0
+	translateY := (flippedY/canvasH)*2.0 - 1.0
 
 	// Create 3x3 transform matrix (mat3)
 	transform := [9]float32{
@@ -902,7 +969,7 @@ func (p *GLPainterType) getOrCreateTexture(img *image.RGBA) uint32 {
 
 // NOTE: renderTextWithRoboto and renderBitmapGlyph removed
 // These functions are no longer used - text rendering now uses textRenderer
-// which follows Fyne's pattern with go-text/render
+// with go-text/render
 
 func drawButtonBackground(x, y, width, height float32) {
 	gl.Enable(gl.SCISSOR_TEST)
