@@ -93,6 +93,7 @@ impl Limits {
 pub struct Node {
     pub bounds: Rectangle,
     pub children: Vec<Node>,
+    pub view_id: Option<usize>, // For tracking clickable elements
 }
 
 impl Node {
@@ -100,11 +101,34 @@ impl Node {
         Self {
             bounds,
             children: Vec::new(),
+            view_id: None,
         }
     }
-    pub fn with_children(bounds: Rectangle, children: Vec<Node>) -> Self {
-        Self { bounds, children }
+    
+    pub fn new_with_id(bounds: Rectangle, view_id: usize) -> Self {
+        Self {
+            bounds,
+            children: Vec::new(),
+            view_id: Some(view_id),
+        }
     }
+    
+    pub fn with_children(bounds: Rectangle, children: Vec<Node>) -> Self {
+        Self { 
+            bounds, 
+            children, 
+            view_id: None,
+        }
+    }
+    
+    pub fn with_children_and_id(bounds: Rectangle, children: Vec<Node>, view_id: usize) -> Self {
+        Self { 
+            bounds, 
+            children, 
+            view_id: Some(view_id),
+        }
+    }
+    
     pub fn size(&self) -> Size {
         self.bounds.size()
     }
@@ -136,6 +160,16 @@ pub fn layout(view: &View, limits: Limits, measurer: &dyn TextMeasurer) -> Node 
             let size = measurer.measure(&t.string, font_size);
             let w = size.width.min(limits.max_width).max(limits.min_width);
             let h = size.height.min(limits.max_height).max(limits.min_height);
+            Node::new(Rectangle::new(0.0, 0.0, w, h))
+        }
+        View::Button(b) => {
+            // Button layout: measure text + padding
+            use crate::render::DEFAULT_FONT_SIZE;
+            let font_size = b.text_size.unwrap_or(DEFAULT_FONT_SIZE);
+            let text_size = measurer.measure(&b.label, font_size);
+            let padding = b.padding;
+            let w = (text_size.width + padding * 2.0).min(limits.max_width).max(limits.min_width);
+            let h = (text_size.height + padding * 2.0).min(limits.max_height).max(limits.min_height);
             Node::new(Rectangle::new(0.0, 0.0, w, h))
         }
         View::VStack(v) => {

@@ -4,12 +4,12 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{WindowEvent, MouseButton, ElementState};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowAttributes;
 
 use crate::app::{ContentPosition, ContentSizing, Scene, WindowConfiguration};
-use crate::layout::{layout, Limits};
+use crate::layout::{layout, Limits, Node, Rectangle};
 use crate::render::Renderer;
 use crate::View;
 
@@ -31,8 +31,7 @@ impl HasDisplayHandle for WindowRef {
 
 /// Runs the shellui app: opens a window and runs the event loop.
 /// The view is built once; layout and render run on each frame (e.g. on resize/redraw).
-pub fn run(view: impl FnOnce() -> View) {
-    let view = view();
+pub fn run(view_fn: impl Fn() -> View + 'static) {
     let mut renderer = Renderer::new();
     let _ = renderer.load_default_font();
 
@@ -43,9 +42,13 @@ pub fn run(view: impl FnOnce() -> View) {
         context,
         window: None,
         surface: None,
-        view,
+        content_fn: view_fn,
         renderer,
         config: WindowConfiguration::default(),
+        layout_root: None,
+        offset_x: 0.0,
+        offset_y: 0.0,
+        cursor_pos: (0.0, 0.0),
     };
     let _ = event_loop.run_app(&mut app);
 }
@@ -54,7 +57,6 @@ pub fn run(view: impl FnOnce() -> View) {
 pub fn run_scene(scene: Scene) {
     match scene {
         Scene::WindowGroup { content, config } => {
-            let view = content();
             let mut renderer = Renderer::new();
             let _ = renderer.load_default_font();
 
@@ -65,27 +67,36 @@ pub fn run_scene(scene: Scene) {
                 context,
                 window: None,
                 surface: None,
-                view,
+                content_fn: content,
                 renderer,
                 config,
+                layout_root: None,
+                offset_x: 0.0,
+                offset_y: 0.0,
+                cursor_pos: (0.0, 0.0),
             };
             let _ = event_loop.run_app(&mut app);
         }
     }
 }
 
-struct InternalApp<D> {
+struct InternalApp<D, F> {
     context: softbuffer::Context<D>,
     window: Option<WindowRef>,
     surface: Option<softbuffer::Surface<D, WindowRef>>,
-    view: View,
+    content_fn: F,
     renderer: Renderer,
     config: WindowConfiguration,
+    layout_root: Option<Node>,
+    offset_x: f32,
+    offset_y: f32,
+    cursor_pos: (f32, f32),
 }
 
-impl<D> ApplicationHandler for InternalApp<D>
+impl<D, F> ApplicationHandler for InternalApp<D, F>
 where
     D: HasDisplayHandle,
+    F: Fn() -> View,
 {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
@@ -131,6 +142,14 @@ where
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
+            WindowEvent::MouseInput { button: MouseButton::Left, state: ElementState::Pressed, .. } => {
+                // Handle mouse clicks
+                self.handle_click(self.cursor_pos.0, self.cursor_pos.1);
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                // Store mouse position for click testing
+                self.cursor_pos = (position.x as f32, position.y as f32);
+            }
             WindowEvent::Resized(size) => {
                 if let Some(ref window) = self.window {
                     window.0.request_redraw();
@@ -151,9 +170,10 @@ where
     }
 }
 
-impl<D> InternalApp<D>
+impl<D, F> InternalApp<D, F>
 where
     D: HasDisplayHandle,
+    F: Fn() -> View,
 {
     fn draw(&mut self) {
         let Some(ref mut surface) = self.surface else { return };
@@ -169,13 +189,16 @@ where
         let Ok(mut buffer) = surface.buffer_mut() else { return };
         let pixels: &mut [u32] = &mut *buffer;
         
+        // Rebuild view tree on each draw for reactivity
+        let view = (self.content_fn)();
+        
         // Determine content limits based on sizing mode
         let (content_limits, offset_x, offset_y) = match self.config.content_sizing {
             ContentSizing::Auto => {
                 // Use loose limits and position based on content_position
                 let limits = Limits::loose(width as f32, height as f32);
-                let layout_root = layout(&self.view, limits, &self.renderer);
-                let (offset_x, offset_y) = InternalApp::<D>::calculate_content_offset(
+                let layout_root = layout(&view, limits, &self.renderer);
+                let (offset_x, offset_y) = InternalApp::<D, F>::calculate_content_offset(
                     &self.config,
                     layout_root.bounds.width,
                     layout_root.bounds.height,
@@ -202,7 +225,7 @@ where
                     max_width: w,
                     max_height: h,
                 };
-                let (offset_x, offset_y) = InternalApp::<D>::calculate_content_offset(&self.config, w, h, width as f32, height as f32);
+                let (offset_x, offset_y) = InternalApp::<D, F>::calculate_content_offset(&self.config, w, h, width as f32, height as f32);
                 (limits, offset_x, offset_y)
             },
             ContentSizing::Minimum(min_w, min_h) => {
@@ -213,8 +236,8 @@ where
                     max_width: width as f32,
                     max_height: height as f32,
                 };
-                let layout_root = layout(&self.view, limits, &self.renderer);
-                let (offset_x, offset_y) = InternalApp::<D>::calculate_content_offset(
+                let layout_root = layout(&view, limits, &self.renderer);
+                let (offset_x, offset_y) = InternalApp::<D, F>::calculate_content_offset(
                     &self.config,
                     layout_root.bounds.width,
                     layout_root.bounds.height,
@@ -225,10 +248,16 @@ where
             },
         };
         
-        let layout_root = layout(&self.view, content_limits, &self.renderer);
+        let layout_root = layout(&view, content_limits, &self.renderer);
+        
+        // Store layout and offset for click testing
+        self.layout_root = Some(layout_root.clone());
+        self.offset_x = offset_x;
+        self.offset_y = offset_y;
+        
         let background = 0x00_EE_EE_EEu32; // light gray
         self.renderer.draw(
-            &self.view,
+            &view,
             &layout_root,
             pixels,
             width,
@@ -256,6 +285,59 @@ where
             ContentPosition::Trailing => (extra_width, extra_height), // Bottom-right
             ContentPosition::TopCenter => (extra_width / 2.0, 0.0), // Top-center
             ContentPosition::BottomCenter => (extra_width / 2.0, extra_height), // Bottom-center
+        }
+    }
+
+    fn handle_click(&self, x: f32, y: f32) {
+        if let Some(ref layout_root) = self.layout_root {
+            let view = (self.content_fn)();
+            self.test_click(&view, layout_root, x, y, self.offset_x, self.offset_y);
+        }
+    }
+
+    fn test_click(&self, view: &View, node: &Node, x: f32, y: f32, offset_x: f32, offset_y: f32) {
+        // Adjust coordinates for content offset
+        let local_x = x - offset_x;
+        let local_y = y - offset_y;
+        
+        // Test if click is within this node's bounds
+        if local_x >= node.bounds.x &&
+           local_x <= node.bounds.x + node.bounds.width &&
+           local_y >= node.bounds.y &&
+           local_y <= node.bounds.y + node.bounds.height {
+            
+            // Check if this is a button
+            if let View::Button(button) = view {
+                if let Some(ref callback) = button.on_click {
+                    callback();
+                    // Request a redraw after button click to update UI
+                    if let Some(ref window) = self.window {
+                        window.0.request_redraw();
+                    }
+                    return; // Found a button, execute callback and stop
+                }
+            }
+            
+            // Recursively check children
+            match view {
+                View::VStack(vstack) => {
+                    for (child_view, child_node) in vstack.children.iter().zip(node.children.iter()) {
+                        self.test_click(child_view, child_node, x, y, offset_x + node.bounds.x, offset_y + node.bounds.y);
+                    }
+                }
+                View::HStack(hstack) => {
+                    for (child_view, child_node) in hstack.children.iter().zip(node.children.iter()) {
+                        self.test_click(child_view, child_node, x, y, offset_x + node.bounds.x, offset_y + node.bounds.y);
+                    }
+                }
+                _ => {
+                    // For other views, check children if any
+                    for child_node in &node.children {
+                        // This is a simplified version - in a real implementation,
+                        // we'd need to track which child view corresponds to which node
+                    }
+                }
+            }
         }
     }
 }

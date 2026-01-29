@@ -135,6 +135,23 @@ impl Renderer {
                 let text_color = t.color.unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0)); // Default to black
                 self.draw_text(&t.string, abs_rect, font_size, text_color, buffer, width, height);
             }
+            View::Button(b) => {
+                // Draw button background if present
+                if let Some(background) = &b.background {
+                    self.draw_background(background, abs_rect, buffer, width, height);
+                }
+                // Draw button text (centered within the button bounds)
+                let font_size = b.text_size.unwrap_or(DEFAULT_FONT_SIZE);
+                let text_color = b.text_color.unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0));
+                // Center the text within the button (accounting for padding)
+                let text_rect = Rectangle::new(
+                    abs_rect.x + b.padding,
+                    abs_rect.y + b.padding,
+                    abs_rect.width - b.padding * 2.0,
+                    abs_rect.height - b.padding * 2.0,
+                );
+                self.draw_text(&b.label, text_rect, font_size, text_color, buffer, width, height);
+            }
             View::VStack(v) => {
                 // Draw background if present
                 if let Some(background) = &v.background {
