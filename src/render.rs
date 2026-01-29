@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use crate::layout::{Node, Rectangle, Size, TextMeasurer};
 use crate::view::View;
-use crate::core::background::Background;
+use crate::core::background::{Background, Color};
 use crate::core::renderer::{Quad, Renderer as RendererTrait};
 use crate::core::transformation::Transformation;
 
@@ -132,15 +132,26 @@ impl Renderer {
         match view {
             View::Text(t) => {
                 let font_size = t.size.unwrap_or(DEFAULT_FONT_SIZE);
-                self.draw_text(&t.string, abs_rect, font_size, buffer, width, height);
+                let text_color = t.color.unwrap_or(Color::new(0.0, 0.0, 0.0, 1.0)); // Default to black
+                self.draw_text(&t.string, abs_rect, font_size, text_color, buffer, width, height);
             }
-            View::VStack(_) | View::HStack(_) => {
-                let children_views = match view {
-                    View::VStack(v) => &v.children,
-                    View::HStack(h) => &h.children,
-                    _ => return,
-                };
-                for (child_view, child_node) in children_views.iter().zip(node.children.iter()) {
+            View::VStack(v) => {
+                // Draw background if present
+                if let Some(background) = &v.background {
+                    self.draw_background(background, abs_rect, buffer, width, height);
+                }
+                // Draw children
+                for (child_view, child_node) in v.children.iter().zip(node.children.iter()) {
+                    self.draw_view(child_view, child_node, buffer, width, height, abs_rect);
+                }
+            }
+            View::HStack(h) => {
+                // Draw background if present
+                if let Some(background) = &h.background {
+                    self.draw_background(background, abs_rect, buffer, width, height);
+                }
+                // Draw children
+                for (child_view, child_node) in h.children.iter().zip(node.children.iter()) {
                     self.draw_view(child_view, child_node, buffer, width, height, abs_rect);
                 }
             }
@@ -152,6 +163,7 @@ impl Renderer {
         text: &str,
         rect: Rectangle,
         font_size: f32,
+        color: Color,
         buffer: &mut [u32],
         buf_width: u32,
         buf_height: u32,
@@ -163,7 +175,11 @@ impl Renderer {
         text_buffer.set_text(&mut font_system, text, &Attrs::new(), Shaping::Advanced, None);
         
         let mut swash = SwashCache::new();
-        let color = [0, 0, 0]; // Black text RGB
+        let color_rgb = [
+            (color.r * 255.0) as u8,
+            (color.g * 255.0) as u8, 
+            (color.b * 255.0) as u8
+        ];
         
         for run in text_buffer.layout_runs() {
             for glyph in run.glyphs.iter() {
@@ -171,7 +187,7 @@ impl Renderer {
                 
                 if let Some((glyph_buffer, placement)) = self.glyph_cache.allocate(
                     physical_glyph.cache_key,
-                    color,
+                    color_rgb,
                     &mut font_system,
                     &mut swash,
                 ) {
@@ -220,6 +236,38 @@ impl Renderer {
         }
         
         self.glyph_cache.trim();
+    }
+
+    fn draw_background(
+        &self,
+        background: &Background,
+        rect: Rectangle,
+        buffer: &mut [u32],
+        buf_width: u32,
+        buf_height: u32,
+    ) {
+        match background {
+            Background::Color(color) => {
+                let color_u32 = ((color.a * 255.0) as u32) << 24
+                    | ((color.r * 255.0) as u32) << 16
+                    | ((color.g * 255.0) as u32) << 8
+                    | ((color.b * 255.0) as u32);
+
+                let x_start = rect.x.max(0.0) as u32;
+                let y_start = rect.y.max(0.0) as u32;
+                let x_end = (rect.x + rect.width).min(buf_width as f32) as u32;
+                let y_end = (rect.y + rect.height).min(buf_height as f32) as u32;
+
+                for y in y_start..y_end {
+                    for x in x_start..x_end {
+                        let idx = (y * buf_width + x) as usize;
+                        if idx < buffer.len() {
+                            buffer[idx] = color_u32;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -291,7 +339,7 @@ impl Renderer {
         buf_height: u32,
     ) {
         let bounds = layout.bounds();
-        self.draw_text(text, bounds, font_size, buffer, buf_width, buf_height);
+        self.draw_text(text, bounds, font_size, Color::new(0.0, 0.0, 0.0, 1.0), buffer, buf_width, buf_height);
     }
 }
 

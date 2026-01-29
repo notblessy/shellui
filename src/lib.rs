@@ -2,6 +2,7 @@
 //!
 //! Window, text rendering, and stacks (VStack, HStack) only.
 
+pub mod app;
 pub mod core;
 pub mod layout;
 pub mod render;
@@ -32,5 +33,8 @@ pub use view::{Alignment, HStack, Text, VStack, View};
 // Widget exports (alternative widget-based API)
 pub use widget::{HStack as HStackWidget, VStack as VStackWidget};
 
+// App exports
+pub use app::{App, IntoScene, Scene, WindowConfiguration, WindowGroup, window_group};
+
 // Window exports
-pub use window::run;
+pub use window::{run, run_scene};

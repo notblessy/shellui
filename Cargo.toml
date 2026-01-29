@@ -3,6 +3,10 @@ name = "shellui"
 version = "0.1.0"
 edition = "2021"
 
+[[example]]
+name = "advanced_window"
+path = "examples/advanced_window.rs"
+
 [dependencies]
 winit = "0.30"
 softbuffer = "0.4"

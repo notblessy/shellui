@@ -8,6 +8,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowAttributes;
 
+use crate::app::{Scene, WindowConfiguration};
 use crate::layout::{layout, Limits};
 use crate::render::Renderer;
 use crate::View;
@@ -38,25 +39,51 @@ pub fn run(view: impl FnOnce() -> View) {
     let event_loop = winit::event_loop::EventLoop::new().expect("event loop");
     let display_handle = event_loop.owned_display_handle();
     let context = softbuffer::Context::new(display_handle).expect("softbuffer context");
-    let mut app = App {
+    let mut app = InternalApp {
         context,
         window: None,
         surface: None,
         view,
         renderer,
+        config: WindowConfiguration::default(),
     };
     let _ = event_loop.run_app(&mut app);
 }
 
-struct App<D> {
+/// Runs a scene-based shellui app.
+pub fn run_scene(scene: Scene) {
+    match scene {
+        Scene::WindowGroup { content, config } => {
+            let view = content();
+            let mut renderer = Renderer::new();
+            let _ = renderer.load_default_font();
+
+            let event_loop = winit::event_loop::EventLoop::new().expect("event loop");
+            let display_handle = event_loop.owned_display_handle();
+            let context = softbuffer::Context::new(display_handle).expect("softbuffer context");
+            let mut app = InternalApp {
+                context,
+                window: None,
+                surface: None,
+                view,
+                renderer,
+                config,
+            };
+            let _ = event_loop.run_app(&mut app);
+        }
+    }
+}
+
+struct InternalApp<D> {
     context: softbuffer::Context<D>,
     window: Option<WindowRef>,
     surface: Option<softbuffer::Surface<D, WindowRef>>,
     view: View,
     renderer: Renderer,
+    config: WindowConfiguration,
 }
 
-impl<D> ApplicationHandler for App<D>
+impl<D> ApplicationHandler for InternalApp<D>
 where
     D: HasDisplayHandle,
 {
@@ -64,9 +91,23 @@ where
         if self.window.is_some() {
             return;
         }
-        let window_attrs = WindowAttributes::default()
-            .with_title("shellui")
-            .with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0));
+        let mut window_attrs = WindowAttributes::default()
+            .with_title(&self.config.title)
+            .with_inner_size(winit::dpi::LogicalSize::new(self.config.size.0, self.config.size.1))
+            .with_resizable(self.config.resizable);
+
+        if let Some((min_w, min_h)) = self.config.min_size {
+            window_attrs = window_attrs.with_min_inner_size(winit::dpi::LogicalSize::new(min_w, min_h));
+        }
+
+        if let Some((max_w, max_h)) = self.config.max_size {
+            window_attrs = window_attrs.with_max_inner_size(winit::dpi::LogicalSize::new(max_w, max_h));
+        }
+
+        if self.config.fullscreen {
+            window_attrs = window_attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        }
+
         let window = event_loop
             .create_window(window_attrs)
             .expect("create window");
@@ -110,7 +151,7 @@ where
     }
 }
 
-impl<D> App<D>
+impl<D> InternalApp<D>
 where
     D: HasDisplayHandle,
 {

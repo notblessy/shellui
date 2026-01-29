@@ -1,6 +1,6 @@
 //! SwiftUI-like view types: Text, VStack, HStack.
 
-use crate::core::Background;
+use crate::core::{Background, Color};
 
 /// Alignment along the cross axis for stacks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -27,6 +27,7 @@ impl Alignment {
 pub struct Text {
     pub(crate) string: String,
     pub(crate) size: Option<f32>,
+    pub(crate) color: Option<Color>,
 }
 
 impl Text {
@@ -34,12 +35,19 @@ impl Text {
         Self {
             string: s.into(),
             size: None,
+            color: None,
         }
     }
 
     /// Set the font size in pixels. If not set, uses the default size.
     pub fn size(mut self, size: f32) -> Self {
         self.size = Some(size);
+        self
+    }
+
+    /// Set the text color. If not set, uses black.
+    pub fn color<C: Into<Color>>(mut self, color: C) -> Self {
+        self.color = Some(color.into());
         self
     }
 }
