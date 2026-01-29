@@ -2,6 +2,35 @@
 
 use crate::View;
 
+/// Content positioning within the window when content is smaller than window.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ContentPosition {
+    /// Content positioned at top-left corner
+    Leading,
+    /// Content centered in window (default)
+    #[default]
+    Center,
+    /// Content positioned at bottom-right corner
+    Trailing,
+    /// Content positioned at top-center
+    TopCenter,
+    /// Content positioned at bottom-center
+    BottomCenter,
+}
+
+/// Content sizing mode for the root view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ContentSizing {
+    /// Size automatically based on content (intrinsic size)
+    Auto,
+    /// Fill the entire window
+    FillWindow,
+    /// Fixed size in logical pixels
+    Fixed(f32, f32),
+    /// Minimum size (will expand to fill window if needed)
+    Minimum(f32, f32),
+}
+
 /// Window configuration for a WindowGroup scene.
 #[derive(Debug, Clone)]
 pub struct WindowConfiguration {
@@ -17,6 +46,10 @@ pub struct WindowConfiguration {
     pub fullscreen: bool,
     /// Whether window is resizable
     pub resizable: bool,
+    /// Content sizing mode
+    pub content_sizing: ContentSizing,
+    /// Content positioning within window
+    pub content_position: ContentPosition,
 }
 
 impl Default for WindowConfiguration {
@@ -28,6 +61,8 @@ impl Default for WindowConfiguration {
             max_size: None,
             fullscreen: false,
             resizable: true,
+            content_sizing: ContentSizing::Auto,
+            content_position: ContentPosition::Center,
         }
     }
 }
@@ -66,6 +101,60 @@ impl WindowConfiguration {
     /// Enable or disable window resizing
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
+        self
+    }
+
+    /// Set content sizing mode
+    pub fn content_sizing(mut self, sizing: ContentSizing) -> Self {
+        self.content_sizing = sizing;
+        self
+    }
+
+    /// Set content to auto-size based on intrinsic content size
+    pub fn auto_size(mut self) -> Self {
+        self.content_sizing = ContentSizing::Auto;
+        self
+    }
+
+    /// Set content to fill the entire window
+    pub fn fill_window(mut self) -> Self {
+        self.content_sizing = ContentSizing::FillWindow;
+        self
+    }
+
+    /// Set content to a fixed size
+    pub fn fixed_size(mut self, width: f32, height: f32) -> Self {
+        self.content_sizing = ContentSizing::Fixed(width, height);
+        self
+    }
+
+    /// Position content at top-left (leading)
+    pub fn leading(mut self) -> Self {
+        self.content_position = ContentPosition::Leading;
+        self
+    }
+
+    /// Position content at center (default)
+    pub fn center(mut self) -> Self {
+        self.content_position = ContentPosition::Center;
+        self
+    }
+
+    /// Position content at bottom-right (trailing)
+    pub fn trailing(mut self) -> Self {
+        self.content_position = ContentPosition::Trailing;
+        self
+    }
+
+    /// Position content at top-center
+    pub fn top_center(mut self) -> Self {
+        self.content_position = ContentPosition::TopCenter;
+        self
+    }
+
+    /// Position content at bottom-center
+    pub fn bottom_center(mut self) -> Self {
+        self.content_position = ContentPosition::BottomCenter;
         self
     }
 }
@@ -188,6 +277,60 @@ where
     /// Enable or disable resizing
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.config = self.config.resizable(resizable);
+        self
+    }
+
+    /// Set content sizing mode
+    pub fn content_sizing(mut self, sizing: ContentSizing) -> Self {
+        self.config = self.config.content_sizing(sizing);
+        self
+    }
+
+    /// Set content to auto-size
+    pub fn auto_size(mut self) -> Self {
+        self.config = self.config.auto_size();
+        self
+    }
+
+    /// Set content to fill window
+    pub fn fill_window(mut self) -> Self {
+        self.config = self.config.fill_window();
+        self
+    }
+
+    /// Set fixed content size
+    pub fn fixed_size(mut self, width: f32, height: f32) -> Self {
+        self.config = self.config.fixed_size(width, height);
+        self
+    }
+
+    /// Position content at top-left
+    pub fn leading(mut self) -> Self {
+        self.config = self.config.leading();
+        self
+    }
+
+    /// Position content at center
+    pub fn center(mut self) -> Self {
+        self.config = self.config.center();
+        self
+    }
+
+    /// Position content at bottom-right
+    pub fn trailing(mut self) -> Self {
+        self.config = self.config.trailing();
+        self
+    }
+
+    /// Position content at top-center
+    pub fn top_center(mut self) -> Self {
+        self.config = self.config.top_center();
+        self
+    }
+
+    /// Position content at bottom-center
+    pub fn bottom_center(mut self) -> Self {
+        self.config = self.config.bottom_center();
         self
     }
 }

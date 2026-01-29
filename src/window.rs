@@ -8,7 +8,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowAttributes;
 
-use crate::app::{Scene, WindowConfiguration};
+use crate::app::{ContentPosition, ContentSizing, Scene, WindowConfiguration};
 use crate::layout::{layout, Limits};
 use crate::render::Renderer;
 use crate::View;
@@ -168,10 +168,64 @@ where
         }
         let Ok(mut buffer) = surface.buffer_mut() else { return };
         let pixels: &mut [u32] = &mut *buffer;
-        let limits = Limits::loose(width as f32, height as f32);
-        let layout_root = layout(&self.view, limits, &self.renderer);
-        let offset_x = (width as f32 - layout_root.bounds.width) / 2.0;
-        let offset_y = (height as f32 - layout_root.bounds.height) / 2.0;
+        
+        // Determine content limits based on sizing mode
+        let (content_limits, offset_x, offset_y) = match self.config.content_sizing {
+            ContentSizing::Auto => {
+                // Use loose limits and position based on content_position
+                let limits = Limits::loose(width as f32, height as f32);
+                let layout_root = layout(&self.view, limits, &self.renderer);
+                let (offset_x, offset_y) = InternalApp::<D>::calculate_content_offset(
+                    &self.config,
+                    layout_root.bounds.width,
+                    layout_root.bounds.height,
+                    width as f32,
+                    height as f32
+                );
+                (limits, offset_x, offset_y)
+            },
+            ContentSizing::FillWindow => {
+                // Use exact window size limits
+                let limits = Limits {
+                    min_width: width as f32,
+                    min_height: height as f32,
+                    max_width: width as f32,
+                    max_height: height as f32,
+                };
+                (limits, 0.0, 0.0)
+            },
+            ContentSizing::Fixed(w, h) => {
+                // Use fixed size limits and position based on content_position
+                let limits = Limits {
+                    min_width: w,
+                    min_height: h,
+                    max_width: w,
+                    max_height: h,
+                };
+                let (offset_x, offset_y) = InternalApp::<D>::calculate_content_offset(&self.config, w, h, width as f32, height as f32);
+                (limits, offset_x, offset_y)
+            },
+            ContentSizing::Minimum(min_w, min_h) => {
+                // Use minimum size but allow expansion
+                let limits = Limits {
+                    min_width: min_w,
+                    min_height: min_h,
+                    max_width: width as f32,
+                    max_height: height as f32,
+                };
+                let layout_root = layout(&self.view, limits, &self.renderer);
+                let (offset_x, offset_y) = InternalApp::<D>::calculate_content_offset(
+                    &self.config,
+                    layout_root.bounds.width,
+                    layout_root.bounds.height,
+                    width as f32,
+                    height as f32
+                );
+                (limits, offset_x, offset_y)
+            },
+        };
+        
+        let layout_root = layout(&self.view, content_limits, &self.renderer);
         let background = 0x00_EE_EE_EEu32; // light gray
         self.renderer.draw(
             &self.view,
@@ -184,5 +238,24 @@ where
             offset_y,
         );
         let _ = buffer.present();
+    }
+
+    fn calculate_content_offset(
+        config: &WindowConfiguration,
+        content_width: f32,
+        content_height: f32,
+        window_width: f32,
+        window_height: f32,
+    ) -> (f32, f32) {
+        let extra_width = window_width - content_width;
+        let extra_height = window_height - content_height;
+
+        match config.content_position {
+            ContentPosition::Leading => (0.0, 0.0), // Top-left
+            ContentPosition::Center => (extra_width / 2.0, extra_height / 2.0), // Center
+            ContentPosition::Trailing => (extra_width, extra_height), // Bottom-right
+            ContentPosition::TopCenter => (extra_width / 2.0, 0.0), // Top-center
+            ContentPosition::BottomCenter => (extra_width / 2.0, extra_height), // Bottom-center
+        }
     }
 }

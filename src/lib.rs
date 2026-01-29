@@ -28,13 +28,13 @@ pub use render::Renderer;
 pub use runtime::{Cache, UserInterface};
 
 // View exports (main API)
-pub use view::{Alignment, HStack, Text, VStack, View};
+pub use view::{Alignment, Justify, HStack, Text, VStack, View};
 
 // Widget exports (alternative widget-based API)
 pub use widget::{HStack as HStackWidget, VStack as VStackWidget};
 
 // App exports
-pub use app::{App, IntoScene, Scene, WindowConfiguration, WindowGroup, window_group};
+pub use app::{App, ContentPosition, ContentSizing, IntoScene, Scene, WindowConfiguration, WindowGroup, window_group};
 
 // Window exports
 pub use window::{run, run_scene};

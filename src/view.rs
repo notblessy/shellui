@@ -12,6 +12,18 @@ pub enum Alignment {
     Default,
 }
 
+/// Justification along the main axis for stacks (like CSS justify-content).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Justify {
+    #[default]
+    Start,    // leading/flex-start
+    Center,   // center
+    End,      // trailing/flex-end
+    SpaceBetween, // space-between
+    SpaceAround,  // space-around
+    SpaceEvenly,  // space-evenly
+}
+
 impl Alignment {
     pub(crate) fn factor(self) -> f32 {
         match self {
@@ -57,6 +69,7 @@ impl Text {
 pub struct VStack {
     pub(crate) spacing: f32,
     pub(crate) alignment: Alignment,
+    pub(crate) justify: Justify,
     pub(crate) padding: f32,
     pub(crate) background: Option<Background>,
     pub(crate) children: Vec<View>,
@@ -67,6 +80,7 @@ impl VStack {
         Self {
             spacing: 0.0,
             alignment: Alignment::Default,
+            justify: Justify::Start,
             padding: 0.0,
             background: None,
             children: Vec::new(),
@@ -80,6 +94,31 @@ impl VStack {
 
     pub fn alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
+        self
+    }
+
+    pub fn justify(mut self, justify: Justify) -> Self {
+        self.justify = justify;
+        self
+    }
+
+    pub fn leading(mut self) -> Self {
+        self.justify = Justify::Start;
+        self
+    }
+
+    pub fn trailing(mut self) -> Self {
+        self.justify = Justify::End;
+        self
+    }
+
+    pub fn center_justify(mut self) -> Self {
+        self.justify = Justify::Center;
+        self
+    }
+
+    pub fn space_between(mut self) -> Self {
+        self.justify = Justify::SpaceBetween;
         self
     }
 
@@ -115,6 +154,7 @@ impl Default for VStack {
 pub struct HStack {
     pub(crate) spacing: f32,
     pub(crate) alignment: Alignment,
+    pub(crate) justify: Justify,
     pub(crate) padding: f32,
     pub(crate) background: Option<Background>,
     pub(crate) children: Vec<View>,
@@ -125,6 +165,7 @@ impl HStack {
         Self {
             spacing: 0.0,
             alignment: Alignment::Default,
+            justify: Justify::Start,
             padding: 0.0,
             background: None,
             children: Vec::new(),
@@ -138,6 +179,31 @@ impl HStack {
 
     pub fn alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
+        self
+    }
+
+    pub fn justify(mut self, justify: Justify) -> Self {
+        self.justify = justify;
+        self
+    }
+
+    pub fn leading(mut self) -> Self {
+        self.justify = Justify::Start;
+        self
+    }
+
+    pub fn trailing(mut self) -> Self {
+        self.justify = Justify::End;
+        self
+    }
+
+    pub fn center_justify(mut self) -> Self {
+        self.justify = Justify::Center;
+        self
+    }
+
+    pub fn space_between(mut self) -> Self {
+        self.justify = Justify::SpaceBetween;
         self
     }
 
@@ -185,6 +251,7 @@ impl View {
         Self::VStack(VStack {
             spacing: 0.0,
             alignment: Alignment::Default,
+            justify: Justify::Start,
             padding: 0.0,
             background: None,
             children,
@@ -195,6 +262,7 @@ impl View {
         Self::HStack(HStack {
             spacing: 0.0,
             alignment: Alignment::Default,
+            justify: Justify::Start,
             padding: 0.0,
             background: None,
             children,
@@ -233,6 +301,7 @@ macro_rules! vstack {
         $crate::View::VStack($crate::VStack {
             spacing: 0.0,
             alignment: $crate::Alignment::Default,
+            justify: $crate::Justify::Start,
             padding: 0.0,
             background: None,
             children: vec![$(($child).into()),+],
@@ -247,6 +316,7 @@ macro_rules! hstack {
         $crate::View::HStack($crate::HStack {
             spacing: 0.0,
             alignment: $crate::Alignment::Default,
+            justify: $crate::Justify::Start,
             padding: 0.0,
             background: None,
             children: vec![$(($child).into()),+],

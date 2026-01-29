@@ -142,6 +142,7 @@ pub fn layout(view: &View, limits: Limits, measurer: &dyn TextMeasurer) -> Node 
             view,
             v.spacing,
             v.alignment,
+            v.justify,
             true, // vertical
             limits,
             measurer,
@@ -150,6 +151,7 @@ pub fn layout(view: &View, limits: Limits, measurer: &dyn TextMeasurer) -> Node 
             view,
             h.spacing,
             h.alignment,
+            h.justify,
             false, // horizontal
             limits,
             measurer,
@@ -161,6 +163,7 @@ fn layout_stack(
     view: &View,
     spacing: f32,
     alignment: Alignment,
+    justify: crate::view::Justify,
     vertical: bool,
     limits: Limits,
     measurer: &dyn TextMeasurer,
@@ -193,37 +196,73 @@ fn layout_stack(
         child_nodes.push(node);
     }
 
-    let main_size = main_sum + total_spacing;
+    let content_main_size = main_sum + total_spacing;
     let cross_size = cross_max;
 
     let (total_width, total_height) = if vertical {
         (
             cross_size.min(limits.max_width).max(limits.min_width),
-            main_size.min(limits.max_height).max(limits.min_height),
+            content_main_size.min(limits.max_height).max(limits.min_height),
         )
     } else {
         (
-            main_size.min(limits.max_width).max(limits.min_width),
+            content_main_size.min(limits.max_width).max(limits.min_width),
             cross_size.min(limits.max_height).max(limits.min_height),
         )
     };
 
+    let available_main_space = if vertical { total_height } else { total_width };
+    let extra_space = available_main_space - content_main_size;
+
     let align = alignment.factor();
     let mut main_cursor = 0.0f32;
+    
+    // Calculate justify positioning
+    let (start_offset, item_spacing_extra) = match justify {
+        crate::view::Justify::Start => (0.0, 0.0),
+        crate::view::Justify::End => (extra_space.max(0.0), 0.0),
+        crate::view::Justify::Center => (extra_space.max(0.0) / 2.0, 0.0),
+        crate::view::Justify::SpaceBetween => {
+            if children_views.len() > 1 && extra_space > 0.0 {
+                (0.0, extra_space / (children_views.len() - 1) as f32)
+            } else {
+                (0.0, 0.0)
+            }
+        },
+        crate::view::Justify::SpaceAround => {
+            if extra_space > 0.0 {
+                let space_per_item = extra_space / children_views.len() as f32;
+                (space_per_item / 2.0, space_per_item)
+            } else {
+                (0.0, 0.0)
+            }
+        },
+        crate::view::Justify::SpaceEvenly => {
+            if extra_space > 0.0 {
+                let space_per_gap = extra_space / (children_views.len() + 1) as f32;
+                (space_per_gap, space_per_gap)
+            } else {
+                (0.0, 0.0)
+            }
+        },
+    };
+
+    main_cursor = start_offset;
 
     let positioned: Vec<Node> = child_nodes
         .into_iter()
-        .map(|mut node| {
+        .enumerate()
+        .map(|(i, mut node)| {
             let (mw, mh) = (node.bounds.width, node.bounds.height);
             let (x, y) = if vertical {
                 let cross_offset = (total_width - mw) * align;
                 let y = main_cursor;
-                main_cursor += mh + spacing;
+                main_cursor += mh + spacing + if i < children_views.len() - 1 { item_spacing_extra } else { 0.0 };
                 (cross_offset, y)
             } else {
                 let cross_offset = (total_height - mh) * align;
                 let x = main_cursor;
-                main_cursor += mw + spacing;
+                main_cursor += mw + spacing + if i < children_views.len() - 1 { item_spacing_extra } else { 0.0 };
                 (x, cross_offset)
             };
             node.bounds = Rectangle::new(x, y, mw, mh);

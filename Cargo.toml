@@ -7,6 +7,14 @@ edition = "2021"
 name = "advanced_window"
 path = "examples/advanced_window.rs"
 
+[[example]]
+name = "content_sizing"
+path = "examples/content_sizing.rs"
+
+[[example]]
+name = "fill_window"
+path = "examples/fill_window.rs"
+
 [dependencies]
 winit = "0.30"
 softbuffer = "0.4"
