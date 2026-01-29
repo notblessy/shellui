@@ -1,0 +1,36 @@
+//! shellui: SwiftUI-like GUI framework prototype.
+//!
+//! Window, text rendering, and stacks (VStack, HStack) only.
+
+pub mod core;
+pub mod layout;
+pub mod render;
+pub mod runtime;
+pub mod view;
+pub mod widget;
+pub mod window;
+
+// Core exports
+pub use core::{
+    Background, Border, Color, Cursor, Element, Event, Interaction, Layout, Length, Limits, Node,
+    Point, RedrawRequest, Renderer as RendererTrait, Shell, Shadow, Size as CoreSize, Status, Tag,
+    Tree, Transformation, Vector, WindowEvent,
+};
+
+// Layout exports
+pub use layout::{layout, PlaceholderMeasurer, Rectangle, Size, TextMeasurer};
+
+// Render exports
+pub use render::Renderer;
+
+// Runtime exports
+pub use runtime::{Cache, UserInterface};
+
+// View exports (backward compatibility)
+pub use view::{Alignment, HStack, Text, VStack, View};
+
+// Widget exports
+pub use widget::{HStack as HStackWidget, Text as TextWidget, VStack as VStackWidget};
+
+// Window exports
+pub use window::run;
