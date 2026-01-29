@@ -138,24 +138,102 @@ pub fn layout(view: &View, limits: Limits, measurer: &dyn TextMeasurer) -> Node 
             let h = size.height.min(limits.max_height).max(limits.min_height);
             Node::new(Rectangle::new(0.0, 0.0, w, h))
         }
-        View::VStack(v) => layout_stack(
-            view,
-            v.spacing,
-            v.alignment,
-            v.justify,
-            true, // vertical
-            limits,
-            measurer,
-        ),
-        View::HStack(h) => layout_stack(
-            view,
-            h.spacing,
-            h.alignment,
-            h.justify,
-            false, // horizontal
-            limits,
-            measurer,
-        ),
+        View::VStack(v) => {
+            let padding = v.padding;
+            if padding > 0.0 {
+                // Apply padding: shrink limits for content, then expand result
+                let content_limits = Limits {
+                    min_width: (limits.min_width - padding * 2.0).max(0.0),
+                    min_height: (limits.min_height - padding * 2.0).max(0.0),
+                    max_width: (limits.max_width - padding * 2.0).max(0.0),
+                    max_height: (limits.max_height - padding * 2.0).max(0.0),
+                };
+                
+                let mut content_node = layout_stack(
+                    view,
+                    v.spacing,
+                    v.alignment,
+                    v.justify,
+                    true, // vertical
+                    content_limits,
+                    measurer,
+                );
+                
+                // Move content to account for padding and expand bounds
+                for child in &mut content_node.children {
+                    child.bounds.x += padding;
+                    child.bounds.y += padding;
+                }
+                
+                Node::with_children(
+                    Rectangle::new(
+                        0.0,
+                        0.0,
+                        content_node.bounds.width + padding * 2.0,
+                        content_node.bounds.height + padding * 2.0,
+                    ),
+                    content_node.children,
+                )
+            } else {
+                layout_stack(
+                    view,
+                    v.spacing,
+                    v.alignment,
+                    v.justify,
+                    true, // vertical
+                    limits,
+                    measurer,
+                )
+            }
+        },
+        View::HStack(h) => {
+            let padding = h.padding;
+            if padding > 0.0 {
+                // Apply padding: shrink limits for content, then expand result
+                let content_limits = Limits {
+                    min_width: (limits.min_width - padding * 2.0).max(0.0),
+                    min_height: (limits.min_height - padding * 2.0).max(0.0),
+                    max_width: (limits.max_width - padding * 2.0).max(0.0),
+                    max_height: (limits.max_height - padding * 2.0).max(0.0),
+                };
+                
+                let mut content_node = layout_stack(
+                    view,
+                    h.spacing,
+                    h.alignment,
+                    h.justify,
+                    false, // horizontal
+                    content_limits,
+                    measurer,
+                );
+                
+                // Move content to account for padding and expand bounds
+                for child in &mut content_node.children {
+                    child.bounds.x += padding;
+                    child.bounds.y += padding;
+                }
+                
+                Node::with_children(
+                    Rectangle::new(
+                        0.0,
+                        0.0,
+                        content_node.bounds.width + padding * 2.0,
+                        content_node.bounds.height + padding * 2.0,
+                    ),
+                    content_node.children,
+                )
+            } else {
+                layout_stack(
+                    view,
+                    h.spacing,
+                    h.alignment,
+                    h.justify,
+                    false, // horizontal
+                    limits,
+                    measurer,
+                )
+            }
+        },
     }
 }
 
@@ -257,12 +335,20 @@ fn layout_stack(
             let (x, y) = if vertical {
                 let cross_offset = (total_width - mw) * align;
                 let y = main_cursor;
-                main_cursor += mh + spacing + if i < children_views.len() - 1 { item_spacing_extra } else { 0.0 };
+                main_cursor += mh;
+                // Add spacing between items (not after the last item)
+                if i < children_views.len() - 1 {
+                    main_cursor += spacing + item_spacing_extra;
+                }
                 (cross_offset, y)
             } else {
                 let cross_offset = (total_height - mh) * align;
                 let x = main_cursor;
-                main_cursor += mw + spacing + if i < children_views.len() - 1 { item_spacing_extra } else { 0.0 };
+                main_cursor += mw;
+                // Add spacing between items (not after the last item)
+                if i < children_views.len() - 1 {
+                    main_cursor += spacing + item_spacing_extra;
+                }
                 (x, cross_offset)
             };
             node.bounds = Rectangle::new(x, y, mw, mh);

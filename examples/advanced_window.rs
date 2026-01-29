@@ -6,40 +6,35 @@ struct ContentView;
 
 impl ContentView {
     fn new() -> View {
-        VStack::new()
-            .spacing(20.0)
-            .padding(32.0)
-            .background(Color::new(0.1, 0.1, 0.1, 1.0))
-            .alignment(Alignment::Center)
-            .add(
-                Text::new("Fullscreen Example")
-                    .size(56.0)
-            )
-            .add(
-                Text::new("Press Escape or Cmd+Q to exit fullscreen")
-                    .size(18.0)
-            )
-            .add(
-                HStack::new()
-                    .spacing(16.0)
-                    .padding(20.0)
-                    .background(Color::new(0.2, 0.3, 0.5, 1.0))
-                    .add(Text::new("Window Size:"))
-                    .add(Text::new("1200x800"))
-            )
-            .add(
-                VStack::new()
-                    .spacing(10.0)
-                    .padding(20.0)
-                    .background(Color::new(0.5, 0.2, 0.2, 1.0))
-                    .alignment(Alignment::Center)
-                    .add(Text::new("Configuration").size(24.0))
-                    .add(Text::new("• Min Size: 600x400"))
-                    .add(Text::new("• Max Size: 1920x1080"))
-                    .add(Text::new("• Resizable: Yes"))
-                    .add(Text::new("• Fullscreen: No"))
-            )
-            .into()
+        VStack::new([
+            Text::new("Fullscreen Example")
+                .size(56.0),
+            Text::new("Press Escape or Cmd+Q to exit fullscreen")
+                .size(18.0),
+            HStack::new([
+                Text::new("Window Size:"),
+                Text::new("1200x800"),
+            ])
+            .spacing(16.0)
+            .padding(20.0)
+            .background(Color::new(0.2, 0.3, 0.5, 1.0)),
+            VStack::new([
+                Text::new("Configuration").size(24.0),
+                Text::new("• Min Size: 600x400"),
+                Text::new("• Max Size: 1920x1080"),
+                Text::new("• Resizable: Yes"),
+                Text::new("• Fullscreen: No"),
+            ])
+            .spacing(10.0)
+            .padding(20.0)
+            .background(Color::new(0.5, 0.2, 0.2, 1.0))
+            .alignment(Alignment::Center),
+        ])
+        .spacing(20.0)
+        .padding(32.0)
+        .background(Color::new(0.1, 0.1, 0.1, 1.0))
+        .alignment(Alignment::Center)
+        .into()
     }
 }
 

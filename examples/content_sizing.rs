@@ -6,48 +6,45 @@ struct ContentView;
 
 impl ContentView {
     fn new() -> View {
-        VStack::new()
-            .spacing(20.0)
-            .padding(32.0)
-            .background(Color::new(0.9, 0.9, 0.9, 1.0))
-            .trailing() // Justify to bottom for VStack
-            .add(
-                Text::new("Content Sizing Demo")
-                    .size(36.0)
-                    .color(Color::new(0.1, 0.1, 0.6, 1.0))
-            )
-            .add(
-                HStack::new()
-                    .spacing(16.0)
-                    .padding(20.0)
-                    .background(Color::new(0.7, 0.9, 0.7, 1.0))
-                    .leading() // Justify to left for HStack
-                    .add(Text::new("Leading").color(Color::new(0.2, 0.2, 0.2, 1.0)))
-                    .add(Text::new("Justified").color(Color::new(0.2, 0.2, 0.2, 1.0)))
-            )
-            .add(
-                HStack::new()
-                    .spacing(16.0)
-                    .padding(20.0)
-                    .background(Color::new(0.9, 0.7, 0.7, 1.0))
-                    .center_justify() // Justify to center for HStack
-                    .add(Text::new("Center").color(Color::new(0.2, 0.2, 0.2, 1.0)))
-                    .add(Text::new("Justified").color(Color::new(0.2, 0.2, 0.2, 1.0)))
-            )
-            .add(
-                HStack::new()
-                    .spacing(16.0)
-                    .padding(20.0)
-                    .background(Color::new(0.7, 0.7, 0.9, 1.0))
-                    .trailing() // Justify to right for HStack
-                    .add(Text::new("Trailing").color(Color::new(0.2, 0.2, 0.2, 1.0)))
-                    .add(Text::new("Justified").color(Color::new(0.2, 0.2, 0.2, 1.0)))
-            )
-            .add(
-                Text::new("Fixed 400x300 content size")
-                    .size(14.0)
-                    .color(Color::new(0.5, 0.5, 0.5, 1.0))
-            )
+        VStack::new([
+            Text::new("Content Sizing Demo")
+                .size(36.0)
+                .color(Color::new(0.1, 0.1, 0.6, 1.0)),
+            HStack::new([
+                Text::new("Leading").color(Color::new(0.2, 0.2, 0.2, 1.0)),
+                Text::new("Justified").color(Color::new(0.2, 0.2, 0.2, 1.0)),
+            ])
+            .spacing(16.0)
+            .padding(20.0)
+            .background(Color::new(0.7, 0.9, 0.7, 1.0))
+            .leading(), // Justify to left for HStack
+            HStack::new([
+                Text::new("Center").color(Color::new(0.2, 0.2, 0.2, 1.0)),
+                Text::new("Justified").color(Color::new(0.2, 0.2, 0.2, 1.0)),
+            ])
+            .spacing(16.0)
+            .padding(20.0)
+            .background(Color::new(0.9, 0.7, 0.7, 1.0))
+            .center_justify(), // Justify to center for HStack
+            HStack::new([
+                Text::new("Trailing").color(Color::new(0.2, 0.2, 0.2, 1.0)),
+                Text::new("Justified").color(Color::new(0.2, 0.2, 0.2, 1.0)),
+            ])
+            .spacing(16.0)
+            .padding(20.0)
+            .background(Color::new(0.7, 0.7, 0.9, 1.0))
+            .trailing(), // Justify to right for HStack
+            Text::new("Fixed 400x300 content size")
+                .size(14.0)
+                .color(Color::new(0.5, 0.5, 0.5, 1.0)),
+        ])
+        .spacing(20.0)
+        .padding(32.0)
+        .background(Color::new(0.9, 0.9, 0.9, 1.0))
+        .trailing() // Justify to bottom for VStack
+        .into()
+    }
+}
             .into()
     }
 }

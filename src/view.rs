@@ -76,15 +76,24 @@ pub struct VStack {
 }
 
 impl VStack {
-    pub fn new() -> Self {
+    pub fn new<I>(children: I) -> Self 
+    where
+        I: IntoIterator,
+        I::Item: Into<View>,
+    {
         Self {
             spacing: 0.0,
             alignment: Alignment::Default,
             justify: Justify::Start,
             padding: 0.0,
             background: None,
-            children: Vec::new(),
+            children: children.into_iter().map(|c| c.into()).collect(),
         }
+    }
+    
+    /// Create an empty VStack
+    pub fn empty() -> Self {
+        Self::new(Vec::<View>::new())
     }
 
     pub fn spacing(mut self, spacing: f32) -> Self {
@@ -131,21 +140,11 @@ impl VStack {
         self.background = Some(background.into());
         self
     }
-
-    pub fn push(mut self, child: View) -> Self {
-        self.children.push(child);
-        self
-    }
-
-    pub fn add<V: Into<View>>(mut self, child: V) -> Self {
-        self.children.push(child.into());
-        self
-    }
 }
 
 impl Default for VStack {
     fn default() -> Self {
-        Self::new()
+        Self::empty()
     }
 }
 
@@ -161,15 +160,24 @@ pub struct HStack {
 }
 
 impl HStack {
-    pub fn new() -> Self {
+    pub fn new<I>(children: I) -> Self 
+    where
+        I: IntoIterator,
+        I::Item: Into<View>,
+    {
         Self {
             spacing: 0.0,
             alignment: Alignment::Default,
             justify: Justify::Start,
             padding: 0.0,
             background: None,
-            children: Vec::new(),
+            children: children.into_iter().map(|c| c.into()).collect(),
         }
+    }
+    
+    /// Create an empty HStack
+    pub fn empty() -> Self {
+        Self::new(Vec::<View>::new())
     }
 
     pub fn spacing(mut self, spacing: f32) -> Self {
@@ -216,21 +224,11 @@ impl HStack {
         self.background = Some(background.into());
         self
     }
-
-    pub fn push(mut self, child: View) -> Self {
-        self.children.push(child);
-        self
-    }
-
-    pub fn add<V: Into<View>>(mut self, child: V) -> Self {
-        self.children.push(child.into());
-        self
-    }
 }
 
 impl Default for HStack {
     fn default() -> Self {
-        Self::new()
+        Self::empty()
     }
 }
 
@@ -248,25 +246,11 @@ impl View {
     }
 
     pub fn vstack(children: Vec<View>) -> Self {
-        Self::VStack(VStack {
-            spacing: 0.0,
-            alignment: Alignment::Default,
-            justify: Justify::Start,
-            padding: 0.0,
-            background: None,
-            children,
-        })
+        Self::VStack(VStack::new(children))
     }
 
     pub fn hstack(children: Vec<View>) -> Self {
-        Self::HStack(HStack {
-            spacing: 0.0,
-            alignment: Alignment::Default,
-            justify: Justify::Start,
-            padding: 0.0,
-            background: None,
-            children,
-        })
+        Self::HStack(HStack::new(children))
     }
 }
 
