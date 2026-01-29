@@ -26,11 +26,11 @@ pub use render::Renderer;
 // Runtime exports
 pub use runtime::{Cache, UserInterface};
 
-// View exports (backward compatibility)
+// View exports (main API)
 pub use view::{Alignment, HStack, Text, VStack, View};
 
-// Widget exports
-pub use widget::{HStack as HStackWidget, Text as TextWidget, VStack as VStackWidget};
+// Widget exports (alternative widget-based API)
+pub use widget::{HStack as HStackWidget, VStack as VStackWidget};
 
 // Window exports
 pub use window::run;

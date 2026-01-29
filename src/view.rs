@@ -1,5 +1,7 @@
 //! SwiftUI-like view types: Text, VStack, HStack.
 
+use crate::core::Background;
+
 /// Alignment along the cross axis for stacks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Alignment {
@@ -47,6 +49,8 @@ impl Text {
 pub struct VStack {
     pub(crate) spacing: f32,
     pub(crate) alignment: Alignment,
+    pub(crate) padding: f32,
+    pub(crate) background: Option<Background>,
     pub(crate) children: Vec<View>,
 }
 
@@ -55,6 +59,8 @@ impl VStack {
         Self {
             spacing: 0.0,
             alignment: Alignment::Default,
+            padding: 0.0,
+            background: None,
             children: Vec::new(),
         }
     }
@@ -69,8 +75,23 @@ impl VStack {
         self
     }
 
+    pub fn padding(mut self, padding: f32) -> Self {
+        self.padding = padding;
+        self
+    }
+
+    pub fn background<B: Into<Background>>(mut self, background: B) -> Self {
+        self.background = Some(background.into());
+        self
+    }
+
     pub fn push(mut self, child: View) -> Self {
         self.children.push(child);
+        self
+    }
+
+    pub fn add<V: Into<View>>(mut self, child: V) -> Self {
+        self.children.push(child.into());
         self
     }
 }
@@ -86,6 +107,8 @@ impl Default for VStack {
 pub struct HStack {
     pub(crate) spacing: f32,
     pub(crate) alignment: Alignment,
+    pub(crate) padding: f32,
+    pub(crate) background: Option<Background>,
     pub(crate) children: Vec<View>,
 }
 
@@ -94,6 +117,8 @@ impl HStack {
         Self {
             spacing: 0.0,
             alignment: Alignment::Default,
+            padding: 0.0,
+            background: None,
             children: Vec::new(),
         }
     }
@@ -108,8 +133,23 @@ impl HStack {
         self
     }
 
+    pub fn padding(mut self, padding: f32) -> Self {
+        self.padding = padding;
+        self
+    }
+
+    pub fn background<B: Into<Background>>(mut self, background: B) -> Self {
+        self.background = Some(background.into());
+        self
+    }
+
     pub fn push(mut self, child: View) -> Self {
         self.children.push(child);
+        self
+    }
+
+    pub fn add<V: Into<View>>(mut self, child: V) -> Self {
+        self.children.push(child.into());
         self
     }
 }
@@ -137,6 +177,8 @@ impl View {
         Self::VStack(VStack {
             spacing: 0.0,
             alignment: Alignment::Default,
+            padding: 0.0,
+            background: None,
             children,
         })
     }
@@ -145,6 +187,8 @@ impl View {
         Self::HStack(HStack {
             spacing: 0.0,
             alignment: Alignment::Default,
+            padding: 0.0,
+            background: None,
             children,
         })
     }
@@ -181,6 +225,8 @@ macro_rules! vstack {
         $crate::View::VStack($crate::VStack {
             spacing: 0.0,
             alignment: $crate::Alignment::Default,
+            padding: 0.0,
+            background: None,
             children: vec![$(($child).into()),+],
         })
     };
@@ -193,6 +239,8 @@ macro_rules! hstack {
         $crate::View::HStack($crate::HStack {
             spacing: 0.0,
             alignment: $crate::Alignment::Default,
+            padding: 0.0,
+            background: None,
             children: vec![$(($child).into()),+],
         })
     };
